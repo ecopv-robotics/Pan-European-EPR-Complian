@@ -1488,10 +1488,14 @@ function renderPoints(){
   let bonusOnly=false;
   function fmt(d){ return d.toISOString().slice(0,10); }
   function rangeLabel(){
+    /* 返回值会直接拼进 el.innerHTML（报表页标题/副标题共 11 处），而 rangeStart/rangeEnd
+       来自 #ptsStart / #ptsEnd 的 .value —— 属"DOM 文本回灌 HTML"的通路
+       （CodeQL: js/xss-through-dom）。这里统一做 HTML 转义：
+       取值只可能是 "YYYY-MM-DD" 或空串，故转义对显示毫无影响，只是把这条路堵死。 */
     if(!rangeStart && !rangeEnd) return '全部';
-    if(rangeStart && rangeEnd) return rangeStart+' ~ '+rangeEnd;
-    if(rangeStart) return '从 '+rangeStart;
-    return '至 '+rangeEnd;
+    if(rangeStart && rangeEnd) return esc(rangeStart)+' ~ '+esc(rangeEnd);
+    if(rangeStart) return '从 '+esc(rangeStart);
+    return '至 '+esc(rangeEnd);
   }
   function inRange(dateStr){
     if(!dateStr) return false;

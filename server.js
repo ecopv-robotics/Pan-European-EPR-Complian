@@ -195,7 +195,6 @@ const HEADER_MAP = {
   '服务开始日期':'serviceStart','服务结束日期':'serviceEnd','服务商':'provider','基础回收':'recycling',
   '驳回原因':'rejectReason','最新交付进度':'progressNote','备注':'remark','备忘':'memo','创建日期':'createDate'
 };
-const STATUS_ORDER = ['待提交','待注册','注册中','待下证','已下证'];
 const GENERIC_STEPS = ['提交资料','官方审核','下发证书'];
 
 /* 注册「每步 1 分」：业务上就是完成一步记一分，与「工作类型及点数」里的配置无关。
@@ -543,15 +542,6 @@ function workTypePoints(typeId){
 }
 function stepKey(c, s){ return c + '|' + s; }
 function getSteps(c, s){ return DB.config.steps[stepKey(c, s)] || GENERIC_STEPS; }
-function orderStep(o){
-  const total = getSteps(o.country, o.serviceItem).length;
-  let pending;
-  if (o.status === '已下证') return { total, pending: total, done: true };
-  if (o.status === '待下证') pending = total;
-  else if (o.status === '注册中') pending = Math.max(2, Math.ceil(total / 2));
-  else pending = 1;
-  return { total, pending, done: false };
-}
 
 /* ---------- HTTP 工具 ---------- */
 let _currentReq = null; // 当前请求对象，供 send() 判断是否支持 gzip
@@ -1057,9 +1047,14 @@ async function handleApi(req, res, pathname){
           for (const [c, arr] of Object.entries(DB.config.managers || {})) {
             if (Array.isArray(arr) && arr.includes(user.displayName)) mine.add(c);
           }
-          const next = Object.assign({}, DB.config.steps || {});
+          /* 用 Object.create(null) 承载 next，并显式跳过原型相关键：
+             请求体一旦出现 "__proto__"，`next[k] = v` 会命中 Object.prototype 上的
+             setter 造成原型污染（CodeQL: js/remote-property-injection）。
+             null-prototype 对象没有该 setter，属于根治；下面的显式跳过是第二道防线。 */
+          const next = Object.assign(Object.create(null), DB.config.steps || {});
           const denied = [];
           for (const [k, v] of Object.entries(body.config.steps)) {
+            if (k === '__proto__' || k === 'constructor' || k === 'prototype') { denied.push(k); continue; }
             const c = String(k).split('|')[0];
             if (mine.has(c)) next[k] = v;
             else if (JSON.stringify(v) !== JSON.stringify((DB.config.steps || {})[k])) denied.push(k);

@@ -179,7 +179,7 @@ function mapRecord(raw, decrypt) {
       const cand = src[f];
       if (cand !== undefined && cand !== null && String(cand) !== '') { v = cand; break; }
     }
-    if (v === undefined || v === null) { out[to] = ''; continue; }
+    if (v == null) { out[to] = ''; continue; }   // 宽松相等：同时覆盖 undefined 与 null
     let val = needDec && typeof decrypt === 'function' ? decrypt(v) : v;
     try { val = conv(val); } catch (e) { val = str(val); }
     out[to] = val;

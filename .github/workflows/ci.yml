@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-check:
+    name: Syntax check (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [ '18', '20' ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Check JavaScript syntax
+        run: |
+          node --check server.js
+          node --check crm_sync.js
+          echo "syntax OK on Node $(node -v)"
+
+  smoke-boot:
+    name: Smoke boot and HTTP probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Boot server and probe index
+        run: |
+          node server.js > server.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 20); do
+            if curl -sf -o /dev/null http://127.0.0.1:3000/; then
+              echo "server responded on attempt $i"
+              kill "$SRV" 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "--- server.log ---"
+          cat server.log || true
+          kill "$SRV" 2>/dev/null || true
+          exit 1
+      - name: Assert no data/secret files were created in repo
+        run: |
+          if git status --porcelain | grep -E 'data\.json|secrets\.json'; then
+            echo "tracked data/secret file appeared"; exit 1
+          fi
+          echo "workspace clean"

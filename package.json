@@ -1,0 +1,6 @@
+{
+  "name": "epr-console",
+  "version": "1.0.0",
+  "description": "欧洲EPR合规交付工作量控制台",
+  "private": true
+}

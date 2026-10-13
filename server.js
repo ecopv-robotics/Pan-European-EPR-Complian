@@ -1047,17 +1047,22 @@ async function handleApi(req, res, pathname){
           for (const [c, arr] of Object.entries(DB.config.managers || {})) {
             if (Array.isArray(arr) && arr.includes(user.displayName)) mine.add(c);
           }
-          /* 用 Object.create(null) 承载 next，并显式跳过原型相关键：
-             请求体一旦出现 "__proto__"，`next[k] = v` 会命中 Object.prototype 上的
-             setter 造成原型污染（CodeQL: js/remote-property-injection）。
-             null-prototype 对象没有该 setter，属于根治；下面的显式跳过是第二道防线。 */
+          /* 键（国家|服务项目）由客户端提交是业务设计本身，这里做三道防线：
+             ① 国家必须在本账号管辖范围内（mine.has）；
+             ② 显式排除 __proto__ / constructor / prototype；
+             ③ 用 Object.defineProperty 写入 —— 只定义**自有数据属性**，不触发任何
+                setter，即使目标是普通对象也不会污染原型链。
+             （CodeQL: js/remote-property-injection） */
           const next = Object.assign(Object.create(null), DB.config.steps || {});
           const denied = [];
           for (const [k, v] of Object.entries(body.config.steps)) {
             if (k === '__proto__' || k === 'constructor' || k === 'prototype') { denied.push(k); continue; }
             const c = String(k).split('|')[0];
-            if (mine.has(c)) next[k] = v;
-            else if (JSON.stringify(v) !== JSON.stringify((DB.config.steps || {})[k])) denied.push(k);
+            if (mine.has(c)) {
+              Object.defineProperty(next, k, { value: v, writable: true, enumerable: true, configurable: true });
+            } else if (JSON.stringify(v) !== JSON.stringify((DB.config.steps || {})[k])) {
+              denied.push(k);
+            }
           }
           if (denied.length) audit(user, 'steps-blocked', '非管理员尝试修改非管辖国家的注册步骤，已忽略：' + denied.slice(0, 20).join(', ') + (denied.length > 20 ? (' 等 ' + denied.length + ' 项') : ''));
           DB.config.steps = next;

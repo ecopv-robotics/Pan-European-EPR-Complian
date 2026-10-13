@@ -646,7 +646,6 @@ const CLOSED_STATUS = ['已撤单','转走/撤单','已注销','注销中','已�
 function isClosedStatus(s){ return CLOSED_STATUS.indexOf(String(s==null?'':s).trim()) >= 0; }
 function orderStep(o){
   const total = getSteps(o.country,o.serviceItem).length;
-  const i = STATUS_ORDER.indexOf(o.status);
   let pending;
   if(o.status==='已下证') return {total, pending:total, done:true};
   if(o.status==='待下证') pending = total;
@@ -1082,7 +1081,6 @@ function renderDashTodo(){
      数据一条不删；数据报表仍完整统计；「撤单 → 取消撤单」会自动回到待办。 */
   const allOrders = filterByRole(DB.workOrders).filter(o=>!isClosedStatus(o.status));
   const allCountries = unique(allOrders.map(o=>o.country));
-  const allServices = unique(allOrders.map(o=>o.serviceItem));
   const rcSet = new Set(responsibleCountries());
   const allDecl = DB.daily.filter(d=>d.type==='wt_dec'&&!d.done && (isManager()||rcSet.has(d.country)));
   const allOther = DB.daily.filter(d=>['wt_areg','wt_adec','wt_abill','wt_pro','wt_sop','wt_audit','wt_file','wt_cross'].includes(d.type)&&!d.done && (isManager()||rcSet.has(d.country)));
@@ -1108,11 +1106,6 @@ function renderDashTodo(){
   const body=$('#dashBody');
   function build(c, s){
     const orders = allOrders.filter(o => (!c || o.country===c) && svcTypeMatch(o.serviceItem, s));
-    const total=orders.length;
-    const done=orders.filter(o=>o.status==='已下证').length;
-    const inprog=orders.filter(o=>o.status==='注册中'||o.status==='待下证').length;
-    const pendingReg=orders.filter(o=>o.status==='待提交'||o.status==='待注册').length;
-    const rc = isManager()?'全部国家':(responsibleCountries().join('、')||'未分配');
     // 申报/其他待办：按筛选国家过滤
     const declTodos = allDecl.filter(d => (!c || d.country===c));
     const otherTodos = allOther.filter(d => (!c || d.country===c));
@@ -2488,7 +2481,7 @@ function renderEntry(){
     });
     decUpdateSel();
   }
-}0
+}
 
 function openBatchStepModal(orderNos){
   if(!orderNos.length){ toast('请先选择工单'); return; }
@@ -3061,8 +3054,7 @@ function renderCfgBody(t){
   // 二次防线：非管理员即便通过脚本调用，也只会落到「各国注册步骤」
   if(!isAdminRole() && t!=='step') t='step';
   if(t==='mgr'){
-    async function loadUserList(){ try{ const r=await api('/api/users'); DB.users=r.users; paint(); }catch(e){ toast('加载账号失败：'+e.message); } }
-    const countries=Object.keys(DB.config.managers);
+    async function loadUserList(){ try{ const r=await api('/api/users'); DB.users=r.users; paintMgr(); }catch(e){ toast('加载账号失败：'+e.message); } }
     body.innerHTML=`<div class="card">
       <h3>国家 - 负责人绑定</h3>
       <div class="hint" style="margin-bottom:12px">修改后仅对新增工单/数据生效，历史工单与历史工作量保持不变（历史数据隔离）。<br>
@@ -3073,7 +3065,7 @@ function renderCfgBody(t){
         <button class="btn primary" id="addCountry" style="align-self:flex-end">添加国家</button>
       </div>
     </div>`;
-    function paint(){
+    function paintMgr(){
       const isAdmin = isAdminRole();
       const countries=Object.keys(DB.config.managers);
       $('#mgrList').innerHTML=countries.map(c=>{
@@ -3087,7 +3079,7 @@ function renderCfgBody(t){
           ${canClear?`<button class="btn danger" data-clear="${esc(c)}" title="清空本国家工单（含对应工作量记录）" style="padding:7px 12px;font-size:12px;white-space:nowrap">清空工单${cnt?' ('+cnt.toLocaleString()+')':''}</button>`:''}
           <button class="btn" data-add="${esc(c)}">+ 负责人</button>
         </div>`;}).join('');
-      $('#mgrList').querySelectorAll('[data-i]').forEach(x=>x.onclick=async()=>{ const c=x.dataset.c; DB.config.managers[c].splice(+x.dataset.i,1); if(!DB.config.managers[c].length) delete DB.config.managers[c]; await pushConfig(); paint(); });
+      $('#mgrList').querySelectorAll('[data-i]').forEach(x=>x.onclick=async()=>{ const c=x.dataset.c; DB.config.managers[c].splice(+x.dataset.i,1); if(!DB.config.managers[c].length) delete DB.config.managers[c]; await pushConfig(); paintMgr(); });
       // 按国家清空工单（服务端会再校验一次权限，前端隐藏只是防误触）
       $('#mgrList').querySelectorAll('[data-clear]').forEach(b=>b.onclick=async()=>{
         const c=b.dataset.clear;
@@ -3117,15 +3109,15 @@ function renderCfgBody(t){
           DB.config.managers[c]=DB.config.managers[c]||[];
           DB.config.managers[c].push(v);
           await pushConfig();
-          paint();
+          paintMgr();
         };
         parent.replaceChild(sel,b);
         sel.focus();
       });
     }
-    paint();
+    paintMgr();
     loadUserList();
-    $('#addCountry').onclick=async()=>{ const v=$('#newCountry').value.trim(); if(v){ DB.config.managers[v]=DB.config.managers[v]||[]; await pushConfig(); $('#newCountry').value=''; paint(); toast('已添加国家 '+v); } };
+    $('#addCountry').onclick=async()=>{ const v=$('#newCountry').value.trim(); if(v){ DB.config.managers[v]=DB.config.managers[v]||[]; await pushConfig(); $('#newCountry').value=''; paintMgr(); toast('已添加国家 '+v); } };
   }
   else if(t==='wt'){
     const DEFAULTS=[
@@ -3196,9 +3188,9 @@ function renderCfgBody(t){
           if(after) to+=1;
           list.splice(to,0,moved);
           dragWid=null;
-          if(list.map(x=>x.id).join(',')===before){ paint(); return; }
+          if(list.map(x=>x.id).join(',')===before){ paintWt(); return; }
           wtDirty=true;
-          paint(); wtState();
+          paintWt(); wtState();
           toast('已把「'+moved.name+'」排到第 '+(list.findIndex(x=>x.id===moved.id)+1)+' 位（点「保存修改」生效）');
         });
         row.addEventListener('dragend',()=>{ dragWid=null; row.draggable=false; row.classList.remove('dragging'); clearDropMarks(); });
@@ -3213,7 +3205,7 @@ function renderCfgBody(t){
         ? '<span style="color:#b45309;font-weight:700">● 有未保存的修改，点右侧「保存修改」后生效</span>'
         : '<span style="color:var(--muted)">修改会先存在本地，点「保存修改」后统一生效</span>';
     }
-    function paint(){
+    function paintWt(){
       $('#wtBody').innerHTML=DB.config.workTypes.map(w=>`
         <tr class="wt-row" data-wid="${esc(w.id)}" draggable="true">
           <td class="wt-handle" title="按住上下拖动可调整顺序"><svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true"><g fill="currentColor"><circle cx="3.2" cy="3" r="1.5"/><circle cx="8.8" cy="3" r="1.5"/><circle cx="3.2" cy="8" r="1.5"/><circle cx="8.8" cy="8" r="1.5"/><circle cx="3.2" cy="13" r="1.5"/><circle cx="8.8" cy="13" r="1.5"/></g></svg></td>
@@ -3229,11 +3221,11 @@ function renderCfgBody(t){
         const w=DB.config.workTypes.find(x=>x.id===i.dataset.id); if(!w) return;
         if(i.dataset.f==='name'){
           const v=i.value.trim();
-          if(!v){ toast('名称不能为空'); paint(); return; }
+          if(!v){ toast('名称不能为空'); paintWt(); return; }
           w.name=v;
         }else{
           const v=+i.value;
-          if(!Number.isFinite(v)||v<0){ toast('点数必须 ≥ 0'); paint(); return; }
+          if(!Number.isFinite(v)||v<0){ toast('点数必须 ≥ 0'); paintWt(); return; }
           w.points=v;
         }
         wtDirty=true; wtState();
@@ -3245,11 +3237,11 @@ function renderCfgBody(t){
           ? '\n⚠️ 这是系统核心类型（注册 / 申报自动记分依赖它），删除后注册、申报录入会受影响！' : '';
         if(!confirm('确认删除「'+w.name+'」？' + warn)) return;
         DB.config.workTypes=DB.config.workTypes.filter(x=>x.id!==b.dataset.del);
-        wtDirty=true; paint(); wtState();
+        wtDirty=true; paintWt(); wtState();
       });
       bindWtDrag();
     }
-    paint(); wtState();
+    paintWt(); wtState();
     $('#addWt').onclick=()=>{
       const n=$('#newWt').value.trim(); const p=+$('#newWtPts').value||3;
       if(!n){ toast('请填写类型名称'); return; }
@@ -3257,12 +3249,12 @@ function renderCfgBody(t){
       if(DB.config.workTypes.some(w=>w.name===n)){ toast('已存在同名类型「'+n+'」'); return; }
       DB.config.workTypes.push({id:'wt_'+Date.now(),name:n,points:p,builtin:false});
       $('#newWt').value=''; $('#newWtPts').value='3';
-      wtDirty=true; paint(); wtState();
+      wtDirty=true; paintWt(); wtState();
     };
     $('#resetWt').onclick=()=>{
       if(!confirm('恢复默认会丢失所有自定义类型，已修改的内置类型也会被覆盖，确定为？')) return;
       DB.config.workTypes = DEFAULTS.map(w=>({...w}));
-      wtDirty=true; paint(); wtState();
+      wtDirty=true; paintWt(); wtState();
       toast('已恢复 10 类默认工作类型，记得点「保存修改」');
     };
     $('#saveWt').onclick=async()=>{
@@ -3278,7 +3270,6 @@ function renderCfgBody(t){
   else if(t==='step'){
     const isAdmin = isAdminRole();
     const allKeys=Object.keys(DB.config.steps);
-    const visibleKeys = isAdmin ? allKeys : allKeys.filter(k=>{ const c=k.split('|')[0]; return (DB.config.managers[c]||[]).includes(DB.me.displayName); });
     let dirty=false;
 
     // 国家和项目下拉数据源
@@ -3401,7 +3392,7 @@ function renderCfgBody(t){
       const cur=$('#stepCountry').value;
       const html = countries.length? countries.map(c=>{
         const active = c===cur;
-        return `<div data-clc="${esc(c)}" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;margin-bottom:6px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid ${active?'transparent':'var(--line)'};background:${active?'var(--brand-soft)':'var(--panel)'};color:${active?'var(--brand-dark)':'var(--ink)'};transition:all .15s" onmouseover="if(this.dataset.clc!=='${esc(cur)}'){this.style.borderColor='var(--brand)';this.style.background='var(--brand-soft)'}" onmouseout="if(this.dataset.clc!=='${esc(cur)}'){this.style.borderColor='var(--line)';this.style.background='var(--panel)'}">
+        return `<div data-clc="${esc(c)}" style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;margin-bottom:6px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;border:1px solid ${active?'transparent':'var(--line)'};background:${active?'var(--brand-soft)':'var(--panel)'};color:${active?'var(--brand-dark)':'var(--ink)'};transition:all .15s">
           <span>🌐 ${esc(c)}</span>
           <span class="pill ${active?'p-green':'p-gray'}" style="font-size:11px">${counts[c]}</span>
         </div>`;
@@ -3409,13 +3400,23 @@ function renderCfgBody(t){
       const box = $('#stepCountryList'); if(!box) return;
       box.innerHTML = html;
       const cnt=$('#cListCount'); if(cnt) cnt.textContent=countries.length;
-      box.querySelectorAll('[data-clc]').forEach(el=>el.onclick=()=>{
-        $('#stepCountry').value=el.dataset.clc;
-        refreshServiceOptions();
-        $('#stepService').value='';
-        syncSelectToKey();
-        paintCountryList();
-        paintOverview();
+      box.querySelectorAll('[data-clc]').forEach(el=>{
+        /* 悬停高亮改为 JS 绑定，不再把国家名拼进内联 onmouseover/onmouseout 属性里 ——
+           内联属性里嵌套引号要经过「HTML 属性 → JS 语句 → JS 字符串」三层转义，极易出错
+           （CodeQL: js/incomplete-html-attribute-sanitization）。视觉与行为完全一致：
+           与原来一样，只有「非当前选中」的国家项才响应悬停。 */
+        if(el.dataset.clc!==cur){
+          el.addEventListener('mouseenter',()=>{ el.style.borderColor='var(--brand)'; el.style.background='var(--brand-soft)'; });
+          el.addEventListener('mouseleave',()=>{ el.style.borderColor='var(--line)'; el.style.background='var(--panel)'; });
+        }
+        el.onclick=()=>{
+          $('#stepCountry').value=el.dataset.clc;
+          refreshServiceOptions();
+          $('#stepService').value='';
+          syncSelectToKey();
+          paintCountryList();
+          paintOverview();
+        };
       });
     }
     function syncSelectToKey(){
@@ -3531,7 +3532,7 @@ function renderCfgBody(t){
           <div class="hint" style="margin-bottom:12px">选择一个已配置好的「国家 · 服务项目」，把它的步骤一次搬过来，适合各国同类项目。支持输入国家或服务项目关键字快速过滤。</div>
           <div class="field"><label>🔍 快速搜索</label><input id="copySearch" placeholder="输入国家或服务项目关键字…" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);font-size:14px;background:var(--panel);color:var(--ink);font-family:inherit"></div>
           <div class="field"><label>来源组合</label><select id="copyFrom" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);font-size:14px;background:var(--panel);color:var(--ink)">
-            ${keys.map(x=>`<option value="${esc(x)}">${esc(x.replace('|',' · '))}（${DB.config.steps[x].length} 步）</option>`).join('')}
+            ${keys.map(x=>`<option value="${esc(x)}">${esc(x.replace(/\|/g,' · '))}（${DB.config.steps[x].length} 步）</option>`).join('')}
           </select></div>
           <div class="mini" id="copyPreview" style="margin:12px 0;padding:10px;background:#f3f7fd;border-radius:8px"></div>
           <div class="row" style="margin-top:16px;justify-content:flex-end;gap:8px;flex-wrap:wrap">

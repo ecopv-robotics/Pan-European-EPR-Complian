@@ -1,0 +1,32 @@
+# ============================================================
+#  ⚠️ 本仓库为 PUBLIC，以下内容绝不允许提交
+# ============================================================
+
+# --- 工单系统同步凭据（生产密钥）---
+secrets.json
+secrets.json.tmp
+*.env
+.env
+
+# --- 运行时数据：含真实工单/账号密码哈希/客户凭证 ---
+data.json
+data.json.tmp
+data.json.bak
+backups/
+uploads/*
+!uploads/.gitkeep
+sessions.json
+audit.log
+audit.log.*
+
+# --- 日志 / 进程文件 ---
+*.log
+server.log
+.server.pid
+
+# --- 依赖与缓存 ---
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

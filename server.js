@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.23';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.26';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------
@@ -1033,7 +1033,9 @@ async function handleApi(req, res, pathname){
   }
 
   /* 修改单条工作量记录的点数（「工作量点数 → 录入明细」里的改分按钮）。
-     权限：管理员可改任意一条；专员只能改自己录入的那条，防止互相改分。 */
+     权限：**只有管理员**能改分（2026-10-12 定的口径）。专员在前端连「改分」列都看不到，
+     服务端再兜一层 403 + 审计 —— 与「删除」不同，**改分不对业务人员开放**，
+     因为改分直接影响排行榜与统计口径，属于管理动作。 */
   if (pathname === '/api/daily/points' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req) || '{}');
     const rec = DB.daily.find(d => d.id === body.id);
@@ -1058,8 +1060,9 @@ async function handleApi(req, res, pathname){
      场景：2026-10-13 刘敏制作 SOP 时因按钮未禁用连点两次，落了两条完全相同的记录，各 +5 分，需要删掉一条。
 
      ⚠️ 边界（刻意为之，别顺手扩）：
-     ① 权限：**只有管理员**能删（与 /api/daily/points 改分同口径）。业务人员前端看不到删除按钮，
-        这里再兜一层 403 —— 记录一旦删掉不可从前端恢复，不能让录入人自己清台账。
+     ① 权限（2026-10-14 放宽）：**管理员可删任意一条；业务人员可删「自己录入」的那条**。
+        业务人员删别人的仍 403 + 审计。前端配套：自己的行才有按钮、别人的行显示 — 占位。
+        ⚠️ 不要把这条口径套到 /api/daily/points（改分）：改分**始终仅管理员**。
      ② 只从 DB.daily 里 splice，**绝不触碰 DB.workOrders / DB.config / DB.users**。
         删一条 SOP/文件整理类记录是纯粹"台账回退"，不影响工单任何字段。
      ③ **不回滚工单进度**：若删的是 wt_reg（注册步骤）类记录，工单上已应用的步骤**保留**
@@ -1074,12 +1077,17 @@ async function handleApi(req, res, pathname){
     try { body = JSON.parse(await readBody(req) || '{}') || {}; }
     catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
     if (!body.id || typeof body.id !== 'string') return send(res, 400, { error: '缺少记录 id' });
-    if (!isAdminLike(user)) {
-      audit(user, 'daily-delete-denied', '非管理员尝试删除工作量记录，已拒绝（id=' + String(body.id) + '）');
-      return send(res, 403, { error: '只有管理员可以删除工作量记录' });
-    }
     const i = DB.daily.findIndex(d => d.id === body.id);
     if (i < 0) return send(res, 404, { error: '记录不存在（可能已被删除，先刷新页面）' });
+    /* 权限（2026-10-14 放宽）：管理员可删任意一条；**业务人员可以删自己录入的那条**。
+       现实场景：录错了国家 / 项目 / 工单号，或保存时连点两次重复记分，
+       本人都需要能删掉重来 —— 否则只能等管理员。
+       仍然**不允许删别人录入的记录**（防止互相改台账），被拒时写一条审计。 */
+    if (!isAdminLike(user) && DB.daily[i].agent !== user.displayName) {
+      audit(user, 'daily-delete-denied', '非管理员尝试删除他人记录，已拒绝（id=' + String(body.id)
+        + '，记录归属 ' + DB.daily[i].agent + '）');
+      return send(res, 403, { error: '只能删除自己录入的记录' });
+    }
     const [rec] = DB.daily.splice(i, 1);
     /* 墓碑：整条记录原样落审计（detail 里嵌 JSON），便于事后人工补回 */
     audit(user, 'daily-delete', '删除工作量记录 ' + rec.id + '｜' + JSON.stringify(rec).slice(0, 1500));

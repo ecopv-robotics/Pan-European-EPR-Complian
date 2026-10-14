@@ -430,7 +430,7 @@
 <div class="login" id="login">
   <div class="box">
     <h2>欧洲EPR合规交付控制台</h2>
-    <div class="sub">多人协作版 · <span class="ver">v1.23</span> · 登录后可见系统内全部数据</div>
+    <div class="sub">多人协作版 · <span class="ver">v1.26</span> · 登录后可见系统内全部数据</div>
     <div class="err" id="loginErr"></div>
     <div class="field"><label>账号</label><input id="loginUser" placeholder="请输入账号" autofocus></div>
     <div class="field"><label>密码</label><input id="loginPw" type="password" placeholder="请输入密码"></div>
@@ -443,7 +443,7 @@
   <aside class="sidebar">
     <div class="logo">
       <div class="dot">E</div>
-      <div><b>EPR 交付控制台</b><span class="ver">v1.23</span><small>欧洲合规 · 工作量管理</small></div>
+      <div><b>EPR 交付控制台</b><span class="ver">v1.26</span><small>欧洲合规 · 工作量管理</small></div>
     </div>
     <nav class="nav" id="nav">
       <button data-page="dash" class="active"><span class="ico">▦</span>驾驶舱看板</button>
@@ -455,7 +455,7 @@
       <button data-page="report"><span class="ico">📊</span>数据报表</button>
       <button data-page="log"><span class="ico">📋</span>系统日志</button>
     </nav>
-    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.23</span><br>数据存于服务端</div>
+    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.26</span><br>数据存于服务端</div>
   </aside>
 
   <div class="main">
@@ -1667,36 +1667,49 @@ function renderPoints(){
     h+='<div class="kpi"><div class="t">人均点数</div><div class="v" style="color:var(--brand)">'+d.perHead+'</div><div class="l">'+d.ranking.length+' 名专员</div></div>';
     h+='</div>';
     h+='<div class="grid boards"><div class="card">';
-    h+='<h3>'+(isManager?'员工工作量点数排行':'我的工作量点数')+' <span class="pill '+(isManager?'p-green':'p-blue')+'">'+rangeLabel()+'</span></h3>';
-    if(isManager){
-      h+='<div class="mini" style="margin:0 0 8px;color:var(--muted)">点击专员姓名可查看他 / 她在该时间段的点数明细</div>';
-      h+='<div class="scroll" style="max-height:480px">';
-      if(d.ranking.length){
-        for(const r of d.ranking){
-          const w=d.max?Math.round(r.total/d.max*100):0;
-          h+='<div class="rank-row" data-agent="'+esc(r.name)+'" title="点击查看 '+esc(r.name)+' 的点数明细" style="padding:12px 6px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:8px"><div style="display:flex;justify-content:space-between;align-items:center"><b style="color:var(--brand-dark)">'+esc(r.name)+' <span class="mini" style="font-weight:400">›</span></b><span class="pill p-green">'+r.total+' 点</span></div><div class="bar" style="margin-top:8px"><i style="width:'+w+'%"></i></div></div>';
-        }
-      } else { h+='<div class="empty">该时间段暂无工作量记录</div>'; }
-      h+='</div>';
-    } else {
-      h+='<div class="scroll" style="max-height:480px"><div style="padding:14px 6px"><div class="mini">专员：'+esc(meName)+'</div><div style="font-size:38px;font-weight:700;color:var(--green);margin:6px 0">'+d.me.total+' <span style="font-size:14px;color:var(--muted)">点（'+rangeLabel()+'）</span></div>';
+    h+='<h3>员工工作量点数排行 <span class="pill '+(isManager?'p-green':'p-blue')+'">'+rangeLabel()+'</span></h3>';
+    /* 需求（2026-10-14 用户反馈）：专员页要和**管理员同一套布局** ——
+       ① 点数排行**对所有人可见**（团队内部公开，专员也能看到同事的点数）；
+       ② 但**明细只放开自己的**：只有自己那一行可点开，同事的行不可点。
+       实现：可点的行才带 data-canopen="1"，下面的绑定只认这些行 ——
+       这样"不能看别人明细"是**结构上**成立，而不是靠点击时弹个提示。
+       ③ 专员原有的「我的点数 / 按类型分布」小卡片**保留**在排行上方。
+      ④（v1.26 用户要求）与它同排的「查看我的操作明细」按钮**已删除** —— 和"点自己名字"
+      完全等价，留着会让人以为明细要另开一处看。**专员打开自己明细的唯一入口就是点自己那一行**，
+      别把这个入口也一起删了（t38 ★【1f】钉住"入口有且只有自己那一行"）。 */
+    h+='<div class="mini" style="margin:0 0 8px;color:var(--muted)">'+(isManager
+      ? '点击专员姓名可查看他 / 她在该时间段的点数明细'
+      : '同事的点数可见；点<b>自己的姓名</b>即可查看自己的明细（含日期 / 类型 / 国家·项目 / 关联工单 / 说明 / 凭证），同事的明细不开放')+'</div>';
+    if(!isManager){
+      h+='<div style="padding:12px;margin:0 0 12px;border:1px solid var(--line);border-radius:10px">'
+        +'<div class="mini">专员：'+esc(meName)+'</div>'
+        +'<div style="font-size:32px;font-weight:700;color:var(--green);margin:4px 0">'+d.me.total
+        +' <span style="font-size:14px;color:var(--muted)">点（'+rangeLabel()+'）</span></div>';
       if(d.me.breakdown.length){
         for(const b of d.me.breakdown){
-          h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)"><span>'+esc(b.name)+'</span><span class="mini">'+b.points+' 点 · '+b.count+' 次</span></div>';
+          h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)"><span>'+esc(b.name)+'</span><span class="mini">'+b.points+' 点 · '+b.count+' 次</span></div>';
         }
       } else { h+='<div class="empty">该时间段暂无个人工作量</div>'; }
-      /* 需求（2026-10-14 用户反馈）：专员此前只能看到「点数合计 + 按类型分布」，
-         看不到**逐条工作的详细说明**（日期 / 类型 / 国家·项目 / 关联工单 / 说明 / 凭证）。
-         这里补一个入口，复用管理员那套 openAgentDetail —— 它按 agent 名过滤，
-         所以专员点开只会看到自己的记录，不会看到同事的。
-         口径：用当前时间段的 d.recs，且**不受"管辖国家"限制** —— 自己录的
-         SOP 制作/文件整理这类不带国家的工作必须能看到（按国家过滤时它们会被挡掉）。 */
-      h+='<div class="row" style="margin-top:14px;gap:10px;align-items:center;flex-wrap:wrap">'
-        +'<button class="btn primary" id="ptsMyDetail" style="padding:8px 16px;font-size:13px">查看我的操作明细</button>'
-        +'<span class="mini" style="color:var(--muted)">'+rangeLabel()+' · 含日期 / 类型 / 国家·项目 / 关联工单 / 说明 / 凭证</span>'
-        +'</div>';
-      h+='</div></div>';
+      /* 2026-10-14 用户要求：**删掉「查看我的操作明细」按钮** ——
+         v1.25 起专员点排行榜里自己的名字就能开同一份明细，按钮是重复入口。
+         「我的点数 / 按类型分布」小卡片保留（那是排行里看不到的按类型拆分）。 */
+      h+='</div>';
+      h+='<div class="mini" style="margin:0 0 6px;color:var(--muted);font-weight:600">全体排行榜</div>';
     }
+    h+='<div class="scroll" style="max-height:480px">';
+    if(d.ranking.length){
+      for(const r of d.ranking){
+        const w=d.max?Math.round(r.total/d.max*100):0;
+        const canOpen = isManager || r.name===meName;
+        h+='<div class="rank-row" data-agent="'+esc(r.name)+'"'+(canOpen?' data-canopen="1"':'')
+          +' title="'+(canOpen?('点击查看 '+esc(r.name)+' 的点数明细'):'只能查看自己的点数明细')+'"'
+          +' style="padding:12px 6px;border-bottom:1px solid var(--line);border-radius:8px;cursor:'+(canOpen?'pointer':'default')+';'+(canOpen?'':'opacity:.72')+'">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center"><b style="color:var(--brand-dark)">'+esc(r.name)
+          +(canOpen?' <span class="mini" style="font-weight:400">›</span>':'')+'</b><span class="pill p-green">'+r.total+' 点</span></div>'
+          +'<div class="bar" style="margin-top:8px"><i style="width:'+w+'%"></i></div></div>';
+      }
+    } else { h+='<div class="empty">该时间段暂无工作量记录</div>'; }
+    h+='</div>';
     h+='</div><div class="card">';
     h+='<h3>工作类型点数分布 <span class="mini">'+rangeLabel()+'</span></h3>';
     h+='<div class="scroll" style="max-height:480px">';
@@ -1776,12 +1789,13 @@ function renderPoints(){
     const boBtn=el.querySelector('#ptsBonusOnly');
     if(boBtn) boBtn.onclick=()=>{ bonusOnly=!bonusOnly; paint(); };
     el.querySelectorAll('[data-ptedit]').forEach(b=>b.onclick=()=>openPointsEdit(b.dataset.ptedit, paint));
-    // 排行榜点击专员姓名 → 该员工在**当前时间段**内的点数明细
-    el.querySelectorAll('.rank-row').forEach(row=>row.onclick=()=>openAgentDetail(row.dataset.agent, d.recs, rangeLabel()));
-    /* 专员专属：「查看我的操作明细」按钮（管理员没有这个按钮，走上面排行点名字）。
-       传 meName 而不是别的 —— openAgentDetail 内部按 agent 精确过滤，天然只看得到自己。 */
-    const myDetailBtn=el.querySelector('#ptsMyDetail');
-    if(myDetailBtn) myDetailBtn.onclick=()=>openAgentDetail(meName, d.recs, rangeLabel());
+    /* 排行榜点击专员姓名 → 该员工在**当前时间段**内的点数明细。
+       2026-10-14：只给带 data-canopen="1" 的行绑事件 —— 专员页里同事的行**根本没有这个属性**，
+       所以"看不到别人的明细"是**结构性**成立的（连事件都不存在），不是靠点击时再判断一次。 */
+    el.querySelectorAll('.rank-row[data-canopen="1"]').forEach(row=>row.onclick=()=>openAgentDetail(row.dataset.agent, d.recs, rangeLabel()));
+    /* 2026-10-14：专员专属的「查看我的操作明细」按钮已删除 —— 点自己名字走的是上面同一个
+       openAgentDetail(agentName=自己)，两个入口完全等价，留着反而让人以为明细要"另开一处看"。
+       ⚠️ `meName` 仍被用于判断"哪一行是自己的"（canOpen 判定），不要顺手删掉。 */
     const xrows = [
       ...d.ranking.map(r=>({类别:'员工排行',名称:r.name,点数:r.total})),
       ...d.typeDist.map(t=>({类别:'类型分布',名称:t.name,点数:t.points,次数:t.count})),
@@ -3145,24 +3159,27 @@ function openPointsEdit(recId, onDone){
 }
 
 /* 删除单条工作量记录（「系统日志 · 操作记录明细」里的「删除」按钮）
-   权限：**仅管理员**。业务人员看不到这个按钮，服务端 /api/daily/delete 还会再拦一次。
-   场景（2026-10-13）：刘敏做瑞典包装 NPA 申报 SOP 时，保存按钮未禁用被连点两次，
-   落下两条完全相同的记录（16:38:46.983 / 16:38:51.704，各 +5 分），需要删掉一条。
+   权限（2026-10-14 放宽）：**管理员可删任意一条；业务人员可以删自己录入的那条**。
+   场景：① 2026-10-13 刘敏做 SOP 时保存按钮未禁用被连点两次，落下两条完全相同的记录；
+        ② 2026-10-14 用户要求「录错了本人要能删掉重来」——录错国家/项目/工单号时不必等管理员。
+   服务端 /api/daily/delete 同口径再拦一次（不能删别人的）。
 
    ⚠️ 删除在界面上**不可撤销**：服务端只从 DB.daily 里移除该条，
       ① 不回滚工单进度（wt_reg 类记录对应的注册步骤保留在工单上，与"进度只进不退"一致）；
       ② 不删 uploads/ 里的凭证文件（留成孤儿，避免误删被别处引用的文件）；
       ③ 整条记录会以 JSON 原样写进 audit.log，真删错了可人工补回。
-   因此这里二次确认里把"人 / 类型 / 分数 / 日期 / 说明"都摊开给管理员看。 */
+   因此这里二次确认里把"人 / 类型 / 分数 / 日期 / 说明"都摊开给对方看。 */
 async function delDailyRecord(recId, onDone){
   const rec=(DB.daily||[]).find(d=>d.id===recId);
   if(!rec){ toast('记录不存在（可能已被删除，先刷新页面）'); return; }
-  if(!isAdminRole()){ toast('只有管理员可以删除工作量记录'); return; }
+  /* 权限：管理员不限；业务人员只能删**自己录入**的那条（前端先拦，服务端再拦一次） */
+  if(!isAdminRole() && rec.agent!==DB.me.displayName){ toast('只能删除自己录入的记录'); return; }
   /* 原生 confirm 不认 HTML，这里一律用纯文本（把换行压成空格，避免弹窗被撑开） */
   const line=[rec.agent, workTypeName(rec.type, rec.country, rec.agent), '+'+(rec.points||0)+' 分', rec.date||'-'].join(' · ');
   const noteTxt=rec.note ? String(rec.note).replace(/\s+/g,' ').slice(0,80) : '（未填写说明）';
   if(!confirm('确定删除这条工作量记录吗？\n\n'+line+'\n说明：'+noteTxt
-    +'\n\n删除后该条的点数会从所有统计里消失，界面上无法撤销（管理员可从审计日志补回）。')) return;
+    +'\n\n删除后该条的点数会从所有统计里消失，界面上无法撤销'
+    +(isAdminRole()?'（管理员可从审计日志补回）。':'（可联系管理员从审计日志补回）。'))) return;
   const btn=document.querySelector('[data-deldaily="'+recId+'"]');
   if(btn){ btn.disabled=true; btn.textContent='删除中…'; }
   try{
@@ -3883,7 +3900,11 @@ function renderLog(){
   const el=$('#page-log');
   try{
     const rcSet=new Set(responsibleCountries());
-    const daily=isManager()?DB.daily:DB.daily.filter(d=>rcSet.has(d.country));
+    /* 可见范围：管理员的全部；业务人员 = **自己管辖国家** ∪ **自己录入的记录**。
+       后半段是 2026-10-14 新增的 —— 业务人员要能删掉自己录错的记录，前提是能先看到它；
+       而他自己的记录里「其他工作」那几类（SOP / 文件整理 / 海外询单）国家是空的，
+       跨岗协助也可能落在别国，只按国家过滤就永远看不到、也就没法删。 */
+    const daily=isManager()?DB.daily:DB.daily.filter(d=>rcSet.has(d.country)||d.agent===DB.me.displayName);
     const total=daily.length;
 
     const byDate={};
@@ -3898,11 +3919,21 @@ function renderLog(){
     const todayCnt=byDate[today()]||0;
     const recent7=dateKeys.filter(d=>{ const dd=new Date(d); const diff=(new Date()-dd)/86400000; return diff>=0&&diff<=7; }).reduce((s,d)=>s+(byDate[d]||0),0);
 
+    /* 「删除」列的可见性（2026-10-14 放宽权限后）：
+       管理员 → 每一行都能删；业务人员 → 只有**自己录入**的行有按钮。
+       ⚠️ 一旦决定显示该列，**每一行都必须吐出 <td>**（不能删的行放占位符），
+          否则列数不齐、表格会错位。
+       ⚠️ 2026-10-14：该列从**最右**挪到**最左（日期左边）** —— 原来在最后，
+          表格很长时根本看不出按钮对应的是哪一行（用户反馈）。 */
+    const canDelAny = isAdminRole();
+    const hasDelCol = canDelAny || daily.some(d=>d.agent===DB.me.displayName);
+    const canDel = d => canDelAny || d.agent===DB.me.displayName;
+
     el.innerHTML=`
     <div class="sec-head" style="margin-bottom:16px">
       <span class="num" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);font-size:15px">📋</span>
       <h2>系统日志</h2>
-      <span class="mini">所有操作记录（注册录入 / 申报录入 / 其他工作的录入明细）</span>
+      <span class="mini">所有操作记录（注册录入 / 申报录入 / 其他工作的录入明细）${isManager()?'':' · 你自己录入的记录可点「删除」删掉重来'}</span>
     </div>
 
     <div class="grid kpis">
@@ -3929,8 +3960,8 @@ function renderLog(){
       </div>
       <div class="scroll" style="max-height:560px">
         ${total?`
-        <table><thead><tr><th>日期</th><th>专员</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th>${isAdminRole()?'<th style="width:84px">操作</th>':''}</tr></thead><tbody>
-        ${daily.slice().reverse().map(d=>`<tr><td>${esc(d.date)}</td><td>${esc(d.agent)}</td><td>${esc(workTypeName(d.type, d.country, d.agent))}${d.cross?' <span class="pill p-purple">跨岗</span>':''}</td><td>${esc((d.country||'')+(d.serviceItem?(' · '+d.serviceItem):''))}</td><td>${esc(d.orderNo||'-')}</td><td>+${d.points}</td><td class="mini">${esc(d.note||'')}</td>${isAdminRole()?`<td><button class="btn" data-deldaily="${esc(d.id)}" title="删除这条工作量记录（不可撤销）" style="padding:3px 10px;font-size:12px;color:#b91c1c;border-color:#fca5a5">删除</button></td>`:''}</tr>`).join('')}
+        <table><thead><tr>${hasDelCol?'<th style="width:84px">操作</th>':''}<th>日期</th><th>专员</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th></tr></thead><tbody>
+        ${daily.slice().reverse().map(d=>`<tr>${hasDelCol?(`<td>${canDel(d)?`<button class="btn" data-deldaily="${esc(d.id)}" title="删除这条工作量记录（不可撤销）：${esc(d.date)} ${esc((d.country||'')+(d.serviceItem?(' · '+d.serviceItem):''))}" style="padding:3px 10px;font-size:12px;color:#b91c1c;border-color:#fca5a5">删除</button>`:'<span class="mini" style="color:var(--muted)">—</span>'}</td>`):''}<td>${esc(d.date)}</td><td>${esc(d.agent)}</td><td>${esc(workTypeName(d.type, d.country, d.agent))}${d.cross?' <span class="pill p-purple">跨岗</span>':''}</td><td>${esc((d.country||'')+(d.serviceItem?(' · '+d.serviceItem):''))}</td><td>${esc(d.orderNo||'-')}</td><td>+${d.points}</td><td class="mini">${esc(d.note||'')}</td></tr>`).join('')}
         </tbody></table>
         `:`<div class="empty" style="padding:60px 20px">暂无操作记录<br><span class="mini" style="margin-top:8px">注册录入 / 申报录入 / 其他工作 提交后会自动记录在这里</span></div>`}
       </div>
@@ -3967,10 +3998,11 @@ function renderLog(){
       日期:d.date,专员:d.agent,类型:workTypeName(d.type, d.country, d.agent),国家:d.country||'',项目:d.serviceItem||'',关联工单:d.orderNo||'',点数:d.points,说明:d.note||''
     })));
 
-    /* 管理员专属：每行末尾的「删除」按钮（权限与副作用边界见 delDailyRecord 的注释）。
+    /* 每行**最前面**（日期左边）的「删除」按钮：管理员对全部行，业务人员只对自己录入的行（能力判定见上方 canDel）。
+       （权限与副作用边界见 delDailyRecord 的注释）
        这里逐行 addEventListener 而不是内联 onclick —— 一是避开 CodeQL 的内联事件处理器告警，
        二是删除是危险操作，走函数便于统一做二次确认 + 请求期间禁用按钮。 */
-    if(isAdminRole()){
+    if(hasDelCol){
       el.querySelectorAll('[data-deldaily]').forEach(b=>{ b.onclick=()=>delDailyRecord(b.dataset.deldaily, renderLog); });
     }
   }catch(e){

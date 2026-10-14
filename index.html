@@ -234,6 +234,31 @@
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
   th{color:var(--muted);font-weight:700;background:#f3f7fd;position:sticky;top:0}
   tbody tr:hover{background:#f1f6fd}
+  /* 「操作明细」类表格：说明列必须能换行看全。
+     全局 th,td{white-space:nowrap} 会把长说明（如 SOP 的一整句话）撑成一行，
+     表格因此宽过弹窗 → 出现横向滚动条且说明被裁掉（2026-10-14 用户反馈截图）。
+     这里只对这张表用 table-layout:fixed 定死各列宽度，把剩余宽度全给「说明」并允许折行；
+     其余列保持 nowrap。仅影响带 .note-table 的表，全局样式不动。
+
+     ⚠️ 只加 table-layout:fixed 还不够：table 宽度为 auto 时，规则是「取容器宽与各列宽之和的较大者」，
+     而「类型」列里的「待加分 / 跨岗」小标签连同文字是 nowrap、往往超过给定列宽，
+     于是列宽之和 > 容器宽 → 整个表仍被撑到 967px（> 弹窗 882px）→ 横向滚动条依旧。
+     故必须同时写死 width:100%：这样表宽恒等于容器，多出来的宽度只会分给「说明」列。 */
+  .note-table{width:100%;table-layout:fixed}
+  .note-table th:nth-child(1),.note-table td:nth-child(1){width:84px}
+  .note-table th:nth-child(2),.note-table td:nth-child(2){width:110px}
+  .note-table th:nth-child(3),.note-table td:nth-child(3){width:112px}
+  .note-table th:nth-child(4),.note-table td:nth-child(4){width:124px}
+  .note-table th:nth-child(5),.note-table td:nth-child(5){width:52px}
+  .note-table th:nth-child(6),.note-table td:nth-child(6){width:auto}
+  .note-table th:nth-child(7),.note-table td:nth-child(7){width:92px;white-space:normal}
+  /* 带标签/长文本的列（类型、国家·项目、关联工单、说明）一律允许折行，
+     否则 nowrap 的文字会溢出列宽、视觉上串列。日期/点数/凭证保持 nowrap。 */
+  .note-table th:nth-child(2),.note-table td:nth-child(2),
+  .note-table th:nth-child(3),.note-table td:nth-child(3),
+  .note-table th:nth-child(4),.note-table td:nth-child(4),
+  .note-table th:nth-child(6),.note-table td:nth-child(6){
+    white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.55}
   .scroll{max-height:440px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm)}
   /* 工作类型排序：按住左侧 ⠿ 上下拖动 */
   #wtBody tr.wt-row.dragging td{opacity:.45}
@@ -254,6 +279,13 @@
   .modal-bg{position:fixed;inset:0;background:rgba(15,35,20,.35);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:20}
   .modal-bg.show{display:flex}
   .modal{background:#fff;border-radius:22px;width:min(960px,94vw);max-height:92vh;overflow:auto;padding:32px 38px;box-shadow:0 30px 90px rgba(15,40,25,.32)}
+  /* 图片凭证预览（灯箱）—— 复用 .modal-bg 的显隐机制，只换 id 与层级 */
+  #imgViewer{z-index:30;background:rgba(10,20,15,.74)}
+  #imgViewerBox{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:94vw;max-height:92vh}
+  #imgViewerImg{max-width:94vw;max-height:80vh;border-radius:12px;background:#fff;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  #imgViewerName{color:#fff;font-size:13px;font-weight:600;word-break:break-all;text-align:center;text-shadow:0 1px 4px rgba(0,0,0,.7);padding:0 12px}
+  #imgViewerBar{display:flex;gap:10px;align-items:center}
+  #imgViewerBar .btn{padding:7px 16px;font-size:13px}
   .modal .step-pill{font-size:13px;padding:7px 14px;margin:0 8px 10px 0;border-radius:10px}
   .modal .field{margin-bottom:16px}
   .modal label{font-size:13px}
@@ -398,7 +430,7 @@
 <div class="login" id="login">
   <div class="box">
     <h2>欧洲EPR合规交付控制台</h2>
-    <div class="sub">多人协作版 · <span class="ver">v1.13</span> · 登录后可见系统内全部数据</div>
+    <div class="sub">多人协作版 · <span class="ver">v1.23</span> · 登录后可见系统内全部数据</div>
     <div class="err" id="loginErr"></div>
     <div class="field"><label>账号</label><input id="loginUser" placeholder="请输入账号" autofocus></div>
     <div class="field"><label>密码</label><input id="loginPw" type="password" placeholder="请输入密码"></div>
@@ -411,7 +443,7 @@
   <aside class="sidebar">
     <div class="logo">
       <div class="dot">E</div>
-      <div><b>EPR 交付控制台</b><span class="ver">v1.13</span><small>欧洲合规 · 工作量管理</small></div>
+      <div><b>EPR 交付控制台</b><span class="ver">v1.23</span><small>欧洲合规 · 工作量管理</small></div>
     </div>
     <nav class="nav" id="nav">
       <button data-page="dash" class="active"><span class="ico">▦</span>驾驶舱看板</button>
@@ -423,7 +455,7 @@
       <button data-page="report"><span class="ico">📊</span>数据报表</button>
       <button data-page="log"><span class="ico">📋</span>系统日志</button>
     </nav>
-    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.13</span><br>数据存于服务端</div>
+    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.23</span><br>数据存于服务端</div>
   </aside>
 
   <div class="main">
@@ -468,6 +500,18 @@
 
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
+<!-- 图片凭证预览灯箱（2026-10-14 新增）：点「预览」把 /uploads 的图片取回来放大看，
+     不必先下载到本地再打开。非图片文件仍走「下载」。 -->
+<div class="modal-bg" id="imgViewer">
+  <div id="imgViewerBox">
+    <img id="imgViewerImg" alt="凭证预览">
+    <div id="imgViewerName"></div>
+    <div id="imgViewerBar">
+      <button class="btn" id="imgViewerDownload">下载原图</button>
+      <button class="btn primary" id="imgViewerClose">关闭</button>
+    </div>
+  </div>
+</div>
 
 <script>
 /* ============================================================
@@ -537,6 +581,45 @@ async function downloadEvidence(fileName, btn, origName){
     toast('凭证下载失败：' + e.message);
   }
   if(btn){ btn.disabled = false; btn.textContent = old; }
+}
+/* ---- 图片凭证预览（2026-10-14 新增）----
+   需求：凭证里的**图片**要能直接预览，不用先下载到本地再打开。
+   实现：仍然用带令牌的 fetch 把文件取回来（/uploads 走应用鉴权，直接给链接会 401），
+        图片 → 生成 ObjectURL 塞进灯箱 <img>；非图片 → 自动退回「下载」。
+   ⚠️ ObjectURL 必须 revoke，否则反复预览会一直占内存。 */
+const IMG_EVID_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+function isImageEvidence(fileName, origName){
+  return IMG_EVID_RE.test(String(origName || '')) || IMG_EVID_RE.test(String(fileName || ''));
+}
+async function fetchEvidenceBlob(fileName){
+  const headers = {};
+  if(TOKEN){ headers['Authorization'] = 'Bearer ' + TOKEN; headers['X-Auth-Token'] = TOKEN; }
+  const res = await fetch('/uploads/' + encodeURIComponent(fileName), { headers });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  return res.blob();
+}
+async function openEvidencePreview(fileName, origName){
+  if(!fileName){ toast('该凭证没有文件'); return; }
+  if(!isImageEvidence(fileName, origName)){ downloadEvidence(fileName, null, origName); return; }
+  try{
+    const blob = await fetchEvidenceBlob(fileName);
+    const img = $('#imgViewerImg'); if(!img) return;
+    if(img.dataset.url) URL.revokeObjectURL(img.dataset.url);   // 换图先释放上一张
+    const url = URL.createObjectURL(blob);
+    img.src = url; img.dataset.url = url;
+    $('#imgViewerName').textContent = origName || fileName;
+    const dl = $('#imgViewerDownload');
+    if(dl) dl.onclick = () => downloadEvidence(fileName, dl, origName);
+    $('#imgViewer').classList.add('show');
+  }catch(e){
+    toast('图片预览失败：' + e.message + '（可改用「下载」）');
+  }
+}
+function closeImgViewer(){
+  const v = $('#imgViewer'); if(!v) return;
+  v.classList.remove('show');
+  const img = $('#imgViewerImg');
+  if(img && img.dataset.url){ URL.revokeObjectURL(img.dataset.url); delete img.dataset.url; img.removeAttribute('src'); }
 }
 /* 上传进度版 POST：用 XHR 才能拿到 upload.onprogress（fetch 无法获取上传进度） */
 function postWithProgress(path, bodyObj, onProgress){
@@ -1602,6 +1685,16 @@ function renderPoints(){
           h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)"><span>'+esc(b.name)+'</span><span class="mini">'+b.points+' 点 · '+b.count+' 次</span></div>';
         }
       } else { h+='<div class="empty">该时间段暂无个人工作量</div>'; }
+      /* 需求（2026-10-14 用户反馈）：专员此前只能看到「点数合计 + 按类型分布」，
+         看不到**逐条工作的详细说明**（日期 / 类型 / 国家·项目 / 关联工单 / 说明 / 凭证）。
+         这里补一个入口，复用管理员那套 openAgentDetail —— 它按 agent 名过滤，
+         所以专员点开只会看到自己的记录，不会看到同事的。
+         口径：用当前时间段的 d.recs，且**不受"管辖国家"限制** —— 自己录的
+         SOP 制作/文件整理这类不带国家的工作必须能看到（按国家过滤时它们会被挡掉）。 */
+      h+='<div class="row" style="margin-top:14px;gap:10px;align-items:center;flex-wrap:wrap">'
+        +'<button class="btn primary" id="ptsMyDetail" style="padding:8px 16px;font-size:13px">查看我的操作明细</button>'
+        +'<span class="mini" style="color:var(--muted)">'+rangeLabel()+' · 含日期 / 类型 / 国家·项目 / 关联工单 / 说明 / 凭证</span>'
+        +'</div>';
       h+='</div></div>';
     }
     h+='</div><div class="card">';
@@ -1685,6 +1778,10 @@ function renderPoints(){
     el.querySelectorAll('[data-ptedit]').forEach(b=>b.onclick=()=>openPointsEdit(b.dataset.ptedit, paint));
     // 排行榜点击专员姓名 → 该员工在**当前时间段**内的点数明细
     el.querySelectorAll('.rank-row').forEach(row=>row.onclick=()=>openAgentDetail(row.dataset.agent, d.recs, rangeLabel()));
+    /* 专员专属：「查看我的操作明细」按钮（管理员没有这个按钮，走上面排行点名字）。
+       传 meName 而不是别的 —— openAgentDetail 内部按 agent 精确过滤，天然只看得到自己。 */
+    const myDetailBtn=el.querySelector('#ptsMyDetail');
+    if(myDetailBtn) myDetailBtn.onclick=()=>openAgentDetail(meName, d.recs, rangeLabel());
     const xrows = [
       ...d.ranking.map(r=>({类别:'员工排行',名称:r.name,点数:r.total})),
       ...d.typeDist.map(t=>({类别:'类型分布',名称:t.name,点数:t.points,次数:t.count})),
@@ -1880,7 +1977,9 @@ function paintSync(st){
     + '<div>凭据：<b>'+(st.hasClientId?'已配置':'未配置')+'</b> <span class="mini">（出于安全考虑，界面不显示账号任何片段）</span></div>'
     + '<div>自动同步：<b>'+(st.enabled?('每 '+st.intervalMinutes+' 分钟'):'已暂停')+'</b></div>'
     + '<div>最近一次：<b>'+(st.lastRunAt?esc(fmtDateTime(st.lastRunAt)):'尚未执行')
-      +((st.lastRunAt&&st.lastDurationMs)?('（用时 '+(st.lastDurationMs/1000).toFixed(1)+' 秒）'):'')+'</b></div>'
+      /* 需求（2026-10-14 用户反馈）：**失败了不显示运行时间**——失败时的"用时"没有意义
+         （失败往往几十秒就中断，看着像"跑得快"反而误导）。只有成功才追加「（用时 N 秒）」。 */
+      +((st.lastRunAt&&st.lastDurationMs&&!st.lastError)?('（用时 '+(st.lastDurationMs/1000).toFixed(1)+' 秒）'):'')+'</b></div>'
     + '<div>下次自动运行：<b>'+(st.nextRunAt?esc(fmtDateTime(st.nextRunAt)):'—')+'</b></div>'
     + '</div>';
   if(st.running) h+='<div class="mini" style="color:var(--amber);margin-bottom:8px">⏳ 正在同步中…正在全量拉取，请稍候（本页会自动刷新结果）</div>';
@@ -2617,6 +2716,34 @@ function renderOther(){
       <label style="display:flex;align-items:center;gap:6px;font-weight:400;color:#b91c1c;font-size:14px;margin-left:18px"><input type="checkbox" id="othBonus"> 请求加分</label>
       <span class="mini" style="color:var(--muted)">勾选后提交：管理员会在「工作量点数 → 录入明细」里看到这条待处理请求，点开查看说明与凭证后酌情给分</span>
     </div>
+    <!-- 加分校准（2026-10-14 需求）：勾选「请求加分」后才出现。
+         三项作为管理员给分的参考维度，会显示在「处理加分请求」弹窗里。 -->
+    <div id="othBonusExtra" style="display:none;margin:0 0 16px;padding:12px 14px;border:1px solid #fde68a;background:#fffbeb;border-radius:12px">
+      <div class="mini" style="color:#b45309;font-weight:700;margin-bottom:10px">加分校准 · 三项都需选择（作为管理员给分的依据）</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+        <div class="field">
+          <label>时长区间</label>
+          <select id="othRange" style="padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;width:100%;box-sizing:border-box;background:#fff">
+            <option value="">请选择时长区间</option>
+            ${['≤30 分钟','0.5-2 小时','2-4 小时','4 小时'].map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>复杂度</label>
+          <select id="othComplexity" style="padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;width:100%;box-sizing:border-box;background:#fff">
+            <option value="">请选择复杂度</option>
+            ${['低','中','高'].map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>影响范围</label>
+          <select id="othImpact" style="padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;width:100%;box-sizing:border-box;background:#fff">
+            <option value="">请选择影响范围</option>
+            ${['个人','小组','部门','跨部门'].map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="field" style="margin-bottom:14px">
       <label>工作说明<span class="oth-req" id="othNoteReq" style="display:none;color:#dc2626;font-weight:700"> *必填</span></label>
       <textarea id="othNote" rows="3" placeholder="如：与PRO邮件确认申报数据 / 处理驳回原因…" style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;width:100%;box-sizing:border-box;background:#fff;font-family:inherit;resize:vertical"></textarea>
@@ -2652,6 +2779,10 @@ function renderOther(){
     const noteReq=$('#othNoteReq'), eviReq=$('#othEviReq');
     if(noteReq) noteReq.style.display = noLoc ? '' : 'none';
     if(eviReq) eviReq.style.display = noLoc ? '' : 'none';
+    /* 加分校准区：只在「请求加分」被勾选时出现（2026-10-14 需求）。
+       放在这里是为了复用它已有的两个调用点：页面初次渲染 + 提交成功后复位。 */
+    const bx=$('#othBonusExtra'), bo=$('#othBonus');
+    if(bx) bx.style.display = (bo && bo.checked) ? '' : 'none';
     if(noLoc){
       const ci=$('#othCountry'), si=$('#othService');
       ci.value=''; fillOthService('','');
@@ -2665,6 +2796,8 @@ function renderOther(){
   }
   $('#othType').addEventListener('change', applyTypeVisibility);
   applyTypeVisibility();
+  /* 勾选 / 取消「请求加分」→ 立刻展开或收起三项加分校准 */
+  if($('#othBonus')) $('#othBonus').addEventListener('change', applyTypeVisibility);
 
   // 关联工单：输入关键词实时搜索，避免 3 万工单下拉卡死
   const oqInput=$('#othOrderQuery'), oqSuggest=$('#othOrderSuggest'), oqValue=$('#othOrder');
@@ -2784,6 +2917,13 @@ function renderOther(){
   }
 
   $('#othSave').onclick=async()=>{
+    const saveBtn=$('#othSave');
+    /* 防重复提交（2026-10-13 修复）：提交期间禁用按钮并给出「保存中」反馈。
+       此前按钮不禁用、保存成功后还要 await loadState() 拉全量（约 20MB），
+       用户在那几秒里看不到任何变化就会再点一次 → 同一份工作被记两次分。
+       实测：刘敏 2026-10-13 16:38:46 与 16:38:51 各提交一次，备注与凭证完全相同。
+       服务端另有 120 秒幂等去重兜底（见 /api/daily）。 */
+    if(saveBtn && saveBtn.disabled) return;
     const type=$('#othType').value;
     const noLoc=needsNoLocation(type);
     const orderNo=$('#othOrder').value;
@@ -2797,23 +2937,41 @@ function renderOther(){
     if(noLoc && !note){ toast('请填写工作说明（该类工作必填）'); $('#othNote').focus(); return; }
     if(noLoc && !eviStore.length){ toast('请上传凭证（该类工作必填）'); return; }
     const requestBonus = !!($('#othBonus') && $('#othBonus').checked);
+    /* 加分校准三项（2026-10-14 需求）：勾了「请求加分」就**必须**选 ——
+       它们是管理员给分的依据，缺了就没法校准（对应文档「在提交时同时选择」）。
+       未勾选请求加分时一律不读取、不提交，避免脏数据。 */
+    const durationRange = requestBonus ? ($('#othRange') ? $('#othRange').value : '') : '';
+    const complexity = requestBonus ? ($('#othComplexity') ? $('#othComplexity').value : '') : '';
+    const impactScope = requestBonus ? ($('#othImpact') ? $('#othImpact').value : '') : '';
+    if(requestBonus){
+      if(!durationRange){ toast('请选择「时长区间」'); const e1=$('#othRange'); if(e1) e1.focus(); return; }
+      if(!complexity){ toast('请选择「复杂度」'); const e2=$('#othComplexity'); if(e2) e2.focus(); return; }
+      if(!impactScope){ toast('请选择「影响范围」'); const e3=$('#othImpact'); if(e3) e3.focus(); return; }
+    }
     const evidence = eviStore.map(it=>({ name:it.name, type:it.type, data: it.dataUrl&&it.dataUrl.includes(',')?it.dataUrl.split(',')[1]:null }));
+    if(saveBtn){ saveBtn.dataset.orig=saveBtn.textContent; saveBtn.disabled=true; saveBtn.textContent='保存中…请勿重复点击'; }
+    let resp=null;
     try{
-      await api('/api/daily',{method:'POST',body:JSON.stringify({
+      resp = await api('/api/daily',{method:'POST',body:JSON.stringify({
         type, orderNo, country, serviceItem:service, note,
-        cross:$('#othCross').checked, requestBonus, date:today(), evidence
+        cross:$('#othCross').checked, requestBonus, date:today(), evidence,
+        durationRange, complexity, impactScope
       })});
       eviStore.length=0; renderEvi(); $('#othNote').value=''; $('#othOrder').value='';
       $('#othCross').checked=false; if($('#othBonus')) $('#othBonus').checked=false;
+      ['#othRange','#othComplexity','#othImpact'].forEach(sel=>{ const e2=$(sel); if(e2) e2.value=''; });
       $('#othCountry').classList.remove('input-locked'); $('#othService').classList.remove('input-locked');
       $('#othCountry').disabled=false; $('#othService').disabled=false;
       $('#othCountry').value=''; fillOthService('','');
       $('#csHint').textContent='（关联工单时自动带出）';
       applyTypeVisibility();
       await loadState();
-      toast(requestBonus ? ('已保存并提交加分请求：'+workTypeName(type)) : ('已保存：'+workTypeName(type)));
+      toast((resp&&resp.duplicate)
+        ? ('这条刚才已经保存过了，未重复记分：'+workTypeName(type))
+        : (requestBonus ? ('已保存并提交加分请求：'+workTypeName(type)) : ('已保存：'+workTypeName(type))));
       go('dash');
     }catch(e){ toast('保存失败：'+e.message); }
+    finally{ if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent=saveBtn.dataset.orig||'保存其他工作'; } }
   };
 }
 
@@ -2919,12 +3077,21 @@ function openPointsEdit(recId, onDone){
   const pend = !!(rec.requestBonus && !rec.bonusHandled);
   const handled = !!(rec.requestBonus && rec.bonusHandled);
   const eviHtml = evi.length
-    ? evi.map((e,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
-        <span style="flex:1;font-size:13px;word-break:break-all">📎 ${esc(e.name||('凭证 '+(i+1)))}</span>
-        ${e.file
+    ? evi.map((e,i)=>{
+        /* 图片凭证给「预览」按钮（点开灯箱放大看）；非图片只给「下载」。
+           2026-10-14 需求：管理员核对凭证时不应被逼着先下载到本地。 */
+        const canPrev = !!(e.file && isImageEvidence(e.file, e.name));
+        const dlBtn = e.file
           ? `<button class="btn" data-evi="${esc(e.file)}" data-eviname="${esc(e.name||'')}" style="padding:3px 12px;font-size:12px;white-space:nowrap">下载</button>`
-          : '<span class="mini" style="color:var(--muted)">（无文件）</span>'}
-      </div>`).join('')
+          : '';
+        const pvBtn = canPrev
+          ? `<button class="btn" data-evpreview="${esc(e.file)}" data-eviname="${esc(e.name||'')}" style="padding:3px 12px;font-size:12px;white-space:nowrap">预览</button>`
+          : '';
+        return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
+        <span style="flex:1;font-size:13px;word-break:break-all">${canPrev?'🖼':'📎'} ${esc(e.name||('凭证 '+(i+1)))}</span>
+        ${(pvBtn||dlBtn) ? `<span style="display:flex;gap:6px;flex:0 0 auto">${pvBtn}${dlBtn}</span>`
+                         : '<span class="mini" style="color:var(--muted)">（无文件）</span>'}
+      </div>`;}).join('')
     : '<div class="mini" style="color:var(--muted);padding:4px 0">该记录没有上传凭证</div>';
   $('#modal').innerHTML=`
     <h3>${pend?'处理加分请求':'修改点数'} <span class="pill p-blue">${esc(workTypeName(rec.type, rec.country, rec.agent))}</span>
@@ -2936,8 +3103,17 @@ function openPointsEdit(recId, onDone){
       <label>工作说明</label>
       <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:14px;white-space:pre-wrap;min-height:42px;word-break:break-word">${rec.note?esc(rec.note):'<span class="mini" style="color:var(--muted)">（未填写工作说明）</span>'}</div>
     </div>
+    ${rec.requestBonus?`
+    <div class="field" style="margin-bottom:14px">
+      <label>加分校准 <span class="mini">（专员提交加分请求时填写的三项评级）</span></label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <span class="pill p-blue">时长区间：${esc(rec.durationRange||'未选择')}</span>
+        <span class="pill p-blue">复杂度：${esc(rec.complexity||'未选择')}</span>
+        <span class="pill p-blue">影响范围：${esc(rec.impactScope||'未选择')}</span>
+      </div>
+    </div>`:''}
     <div class="field" style="margin-bottom:16px">
-      <label>凭证 <span class="mini">（${evi.length} 个 · 点击「下载」保存到本地）</span></label>
+      <label>凭证 <span class="mini">（${evi.length} 个 · 图片可点「预览」放大查看，点「下载」保存到本地）</span></label>
       <div>${eviHtml}</div>
     </div>
     <div class="field" style="margin-bottom:16px">
@@ -2952,6 +3128,8 @@ function openPointsEdit(recId, onDone){
   $('#modalBg').classList.add('show');
   // 凭证下载：/uploads/ 需要令牌，故用带令牌的 fetch 取回再触发下载（直接用链接会 401）
   $('#modal').querySelectorAll('[data-evi]').forEach(b=>b.onclick=()=>downloadEvidence(b.dataset.evi, b, b.dataset.eviname));
+  // 图片凭证预览（2026-10-14）：点「预览」在灯箱里放大看
+  $('#modal').querySelectorAll('[data-evpreview]').forEach(b=>b.onclick=()=>openEvidencePreview(b.dataset.evpreview, b.dataset.eviname));
   $('#ptEditCancel').onclick=closeModal;
   $('#ptEditSave').onclick=async()=>{
     const v=Number($('#ptEditVal').value);
@@ -2964,6 +3142,38 @@ function openPointsEdit(recId, onDone){
       if(typeof onDone==='function') onDone();
     }catch(e){ toast('保存失败：'+e.message); btn.disabled=false; btn.textContent=(pend?'确认给分':'保存'); }
   };
+}
+
+/* 删除单条工作量记录（「系统日志 · 操作记录明细」里的「删除」按钮）
+   权限：**仅管理员**。业务人员看不到这个按钮，服务端 /api/daily/delete 还会再拦一次。
+   场景（2026-10-13）：刘敏做瑞典包装 NPA 申报 SOP 时，保存按钮未禁用被连点两次，
+   落下两条完全相同的记录（16:38:46.983 / 16:38:51.704，各 +5 分），需要删掉一条。
+
+   ⚠️ 删除在界面上**不可撤销**：服务端只从 DB.daily 里移除该条，
+      ① 不回滚工单进度（wt_reg 类记录对应的注册步骤保留在工单上，与"进度只进不退"一致）；
+      ② 不删 uploads/ 里的凭证文件（留成孤儿，避免误删被别处引用的文件）；
+      ③ 整条记录会以 JSON 原样写进 audit.log，真删错了可人工补回。
+   因此这里二次确认里把"人 / 类型 / 分数 / 日期 / 说明"都摊开给管理员看。 */
+async function delDailyRecord(recId, onDone){
+  const rec=(DB.daily||[]).find(d=>d.id===recId);
+  if(!rec){ toast('记录不存在（可能已被删除，先刷新页面）'); return; }
+  if(!isAdminRole()){ toast('只有管理员可以删除工作量记录'); return; }
+  /* 原生 confirm 不认 HTML，这里一律用纯文本（把换行压成空格，避免弹窗被撑开） */
+  const line=[rec.agent, workTypeName(rec.type, rec.country, rec.agent), '+'+(rec.points||0)+' 分', rec.date||'-'].join(' · ');
+  const noteTxt=rec.note ? String(rec.note).replace(/\s+/g,' ').slice(0,80) : '（未填写说明）';
+  if(!confirm('确定删除这条工作量记录吗？\n\n'+line+'\n说明：'+noteTxt
+    +'\n\n删除后该条的点数会从所有统计里消失，界面上无法撤销（管理员可从审计日志补回）。')) return;
+  const btn=document.querySelector('[data-deldaily="'+recId+'"]');
+  if(btn){ btn.disabled=true; btn.textContent='删除中…'; }
+  try{
+    const r=await api('/api/daily/delete',{method:'POST',body:JSON.stringify({id:recId})});
+    await loadState();
+    toast('已删除 1 条记录'+(r&&r.dailyNow!=null?('，当前剩余 '+r.dailyNow+' 条'):''));
+    if(typeof onDone==='function') onDone();
+  }catch(e){
+    toast('删除失败：'+e.message);
+    if(btn){ btn.disabled=false; btn.textContent='删除'; }
+  }
 }
 
 /* 需求（2026-10-13）：「员工工作量点数排行」点专员姓名 → 看该专员的点数明细。
@@ -2986,7 +3196,15 @@ function openAgentDetail(agentName, recs, rangeTxt){
   const rowsHtml = rows.length ? rows.map(r=>{
     const evi = r.evidence || [];
     const eviCell = evi.length
-      ? evi.map((e,i)=>`<button class="btn" data-evi="${esc(e.file||'')}" data-eviname="${esc(e.name||'')}" title="${esc(e.name||'凭证')}" style="padding:2px 7px;font-size:11px;margin-right:3px;${e.file?'':'opacity:.45;cursor:not-allowed'}"${e.file?'':' disabled'}>📎${evi.length>1?String(i+1):''}</button>`).join('')
+      ? evi.map((e,i)=>{
+          const n = evi.length>1 ? String(i+1) : '';
+          if(!e.file) return `<button class="btn" disabled title="${esc(e.name||'凭证')}" style="padding:2px 6px;font-size:11px;margin-right:3px;opacity:.45;cursor:not-allowed">📎${n}</button>`;
+          /* 图片：🔍 预览（灯箱放大）+ 📎 下载；非图片：只给 📎 下载（2026-10-14） */
+          const pv = isImageEvidence(e.file, e.name)
+            ? `<button class="btn" data-evpreview="${esc(e.file)}" data-eviname="${esc(e.name||'')}" title="预览 ${esc(e.name||'')}" style="padding:2px 6px;font-size:11px;margin-right:3px">🔍${n}</button>`
+            : '';
+          return pv + `<button class="btn" data-evi="${esc(e.file)}" data-eviname="${esc(e.name||'')}" title="下载 ${esc(e.name||'')}" style="padding:2px 6px;font-size:11px;margin-right:3px">📎${n}</button>`;
+        }).join('')
       : '<span class="mini" style="color:var(--muted)">-</span>';
     return `<tr>
       <td>${esc(r.date||'-')}</td>
@@ -2995,7 +3213,7 @@ function openAgentDetail(agentName, recs, rangeTxt){
       <td>${esc(r.orderNo||'-')}</td>
       <td>+${r.points||0}</td>
       <td class="mini">${esc(r.note||'')}</td>
-      <td style="white-space:nowrap">${eviCell}</td>
+      <td>${eviCell}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="7" class="empty">该时间段暂无录入记录</td></tr>';
   $('#modal').innerHTML=`
@@ -3005,7 +3223,7 @@ function openAgentDetail(agentName, recs, rangeTxt){
     <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:4px 10px">${bdHtml}</div>
     <div style="font-weight:700;font-size:14px;margin:16px 0 6px">操作明细</div>
     <div class="scroll" style="max-height:330px">
-      <table><thead><tr><th>日期</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th><th>凭证</th></tr></thead>
+      <table class="note-table"><thead><tr><th>日期</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th><th>凭证</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table>
     </div>
     <div class="row" style="justify-content:flex-end;gap:8px;margin-top:16px">
@@ -3014,10 +3232,15 @@ function openAgentDetail(agentName, recs, rangeTxt){
   $('#modalBg').classList.add('show');
   $('#agDetailClose').onclick=closeModal;
   $('#modal').querySelectorAll('[data-evi]').forEach(b=>{ if(b.dataset.evi) b.onclick=()=>downloadEvidence(b.dataset.evi, b, b.dataset.eviname); });
+  $('#modal').querySelectorAll('[data-evpreview]').forEach(b=>{ if(b.dataset.evpreview) b.onclick=()=>openEvidencePreview(b.dataset.evpreview, b.dataset.eviname); });
 }
 
 function closeModal(){ $('#modalBg').classList.remove('show'); }
 $('#modalBg').addEventListener('click',e=>{ if(e.target.id==='modalBg') closeModal(); });
+/* 图片预览灯箱：点背景或 Esc 关闭（点图片本体与按钮不关） */
+$('#imgViewer').addEventListener('click',e=>{ if(e.target.id==='imgViewer') closeImgViewer(); });
+$('#imgViewerClose').onclick = closeImgViewer;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeImgViewer(); });
 
 /* ============================================================
    基础配置
@@ -3706,8 +3929,8 @@ function renderLog(){
       </div>
       <div class="scroll" style="max-height:560px">
         ${total?`
-        <table><thead><tr><th>日期</th><th>专员</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th></tr></thead><tbody>
-        ${daily.slice().reverse().map(d=>`<tr><td>${esc(d.date)}</td><td>${esc(d.agent)}</td><td>${esc(workTypeName(d.type, d.country, d.agent))}${d.cross?' <span class="pill p-purple">跨岗</span>':''}</td><td>${esc((d.country||'')+(d.serviceItem?(' · '+d.serviceItem):''))}</td><td>${esc(d.orderNo||'-')}</td><td>+${d.points}</td><td class="mini">${esc(d.note||'')}</td></tr>`).join('')}
+        <table><thead><tr><th>日期</th><th>专员</th><th>类型</th><th>国家 / 项目</th><th>关联工单</th><th>点数</th><th>说明</th>${isAdminRole()?'<th style="width:84px">操作</th>':''}</tr></thead><tbody>
+        ${daily.slice().reverse().map(d=>`<tr><td>${esc(d.date)}</td><td>${esc(d.agent)}</td><td>${esc(workTypeName(d.type, d.country, d.agent))}${d.cross?' <span class="pill p-purple">跨岗</span>':''}</td><td>${esc((d.country||'')+(d.serviceItem?(' · '+d.serviceItem):''))}</td><td>${esc(d.orderNo||'-')}</td><td>+${d.points}</td><td class="mini">${esc(d.note||'')}</td>${isAdminRole()?`<td><button class="btn" data-deldaily="${esc(d.id)}" title="删除这条工作量记录（不可撤销）" style="padding:3px 10px;font-size:12px;color:#b91c1c;border-color:#fca5a5">删除</button></td>`:''}</tr>`).join('')}
         </tbody></table>
         `:`<div class="empty" style="padding:60px 20px">暂无操作记录<br><span class="mini" style="margin-top:8px">注册录入 / 申报录入 / 其他工作 提交后会自动记录在这里</span></div>`}
       </div>
@@ -3743,6 +3966,13 @@ function renderLog(){
     if(expBtn) expBtn.onclick=()=>exportCSV('系统日志.csv', daily.slice().reverse().map(d=>({
       日期:d.date,专员:d.agent,类型:workTypeName(d.type, d.country, d.agent),国家:d.country||'',项目:d.serviceItem||'',关联工单:d.orderNo||'',点数:d.points,说明:d.note||''
     })));
+
+    /* 管理员专属：每行末尾的「删除」按钮（权限与副作用边界见 delDailyRecord 的注释）。
+       这里逐行 addEventListener 而不是内联 onclick —— 一是避开 CodeQL 的内联事件处理器告警，
+       二是删除是危险操作，走函数便于统一做二次确认 + 请求期间禁用按钮。 */
+    if(isAdminRole()){
+      el.querySelectorAll('[data-deldaily]').forEach(b=>{ b.onclick=()=>delDailyRecord(b.dataset.deldaily, renderLog); });
+    }
   }catch(e){
     el.innerHTML='<div class="card"><h3>渲染错误</h3><div class="empty">'+esc(e.message)+'</div></div>';
     console.error('[renderLog]',e);

@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.13';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.23';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------
@@ -214,12 +214,17 @@ const DEFAULT_WORKTYPES = [
 ];
 
 /* ---------- 数据存取 ---------- */
+/* 引导管理员口令（仅在「空库首次启动」以及「账号列表被完全清空」这两种极窄场景下用到）。
+   公开仓库里不写死"唯一可用的"口令：优先读环境变量 EPR_BOOTSTRAP_ADMIN_PW，
+   未设置时保持与本项目一贯的默认值，因此**已有 data.json 的部署与以往行为完全一致**。
+   生产部署建议设置该环境变量，并在首次登录后立即在「基础配置 → 员工账号」改掉。 */
+const BOOTSTRAP_ADMIN_PW = process.env.EPR_BOOTSTRAP_ADMIN_PW || 'admin123';
 /* 仅在「首次运行 / 整库重置」时用于建初始库的默认账号。
    ⚠️ 这里原本还有 zhangming(张明) / liting(李婷) / wanghao(王浩) 三个示例专员账号，
    已按要求移除：它们是示例数据，且会被 loadDB() 在每次启动时自动补回，
    导致管理员删除后一重启就复活（新 id + 默认密码 123456）。 */
 const SEED_USERS = [
-  ['admin','系统管理员','admin','admin123']
+  ['admin','系统管理员','admin',BOOTSTRAP_ADMIN_PW]
 ];
 function loadDB(){
   let d = null;
@@ -236,8 +241,8 @@ function loadDB(){
   // 避免出现"连管理员都登不进去、只能手工改 data.json"的死局。
   // 注意：账号列表非空时，服务端绝不新增任何账号 —— 管理员删掉的账号不会复活。
   if (!d.users.length) {
-    console.warn('[账号] data.json 中 users 为空，已补建默认管理员 admin / admin123');
-    d.users.push(makeUser('admin', '系统管理员', 'admin', 'admin123'));
+    console.warn('[账号] data.json 中 users 为空，已补建默认管理员 admin（口令见启动日志提示）');
+    d.users.push(makeUser('admin', '系统管理员', 'admin', BOOTSTRAP_ADMIN_PW));
     changed = true;
   }
   // 确保 config 关键字段存在（兼容旧版 data.json 缺 weights）
@@ -975,6 +980,23 @@ async function handleApi(req, res, pathname){
       const dup = DB.daily.find(d => d.type === 'wt_dec' && d.orderNo === body.orderNo);
       if (dup) return send(res, 409, { error: '该工单已完成申报记分，不能重复赋分', duplicate: true, orderNo: body.orderNo });
     }
+    /* 幂等去重（2026-10-13 修复）：SOP / 文件整理 / 海外询单这类"不涉及工单"的工作没有业务键，
+       而「保存其他工作」按钮在提交期间曾不禁用、保存后还要 await loadState() 拉全量（约 20MB）——
+       用户在那几秒里看不到任何反馈，很容易再点一次，同一份工作就被记了两次分。
+       实测：刘敏 2026-10-13 16:38:46.983 与 16:38:51.704 各提交一次，备注与凭证文件名完全相同。
+       规则：同一操作人 + 同类型 + 同日期 + 同国家/项目 + 同工单号 + 同说明，
+       在 120 秒内重复提交 → 视为同一次录入，直接返回已有记录（不新建、不再记分）。 */
+    const DUP_WINDOW_MS = 120000;
+    const nowMs = Date.now();
+    const dupRec = DB.daily.find(d => {
+      const m = /^d(\d{13})/.exec(String(d.id));            // 记录 id 里编码了服务端创建时刻
+      if (!m || (nowMs - Number(m[1])) >= DUP_WINDOW_MS) return false;
+      return d.agent === user.displayName && d.type === body.type
+        && (d.date || '') === (body.date || todayStr())
+        && (d.country || '') === (body.country || '') && (d.serviceItem || '') === (body.serviceItem || '')
+        && (d.orderNo || '') === (body.orderNo || '') && (d.note || '') === (body.note || '');
+    });
+    if (dupRec) return send(res, 200, { ok: true, record: dupRec, duplicate: true });
     const evi = [];
     for (const e of (body.evidence || [])) {
       if (e.data) {
@@ -997,6 +1019,12 @@ async function handleApi(req, res, pathname){
       /* 2026-10-13 需求：业务人员勾选「请求加分」提交 → 管理员在「录入明细」里看到待处理红标并酌情给分。
          requestBonus 记录"发起过请求"，bonusHandled 记录"管理员已给过分"（两者都保留，便于追溯）。 */
       requestBonus: !!body.requestBonus, bonusHandled: false,
+      /* 2026-10-14 需求：请求加分时同时提交「时长区间 / 复杂度 / 影响范围」三项校准评级，
+         管理员在「处理加分请求」弹窗里据此给分。
+         未请求加分一律存空串；三项都是客户端提交的短字符串，统一截断到 40 字符做防御。 */
+      durationRange: (body.requestBonus ? String(body.durationRange || '').slice(0, 40) : ''),
+      complexity: (body.requestBonus ? String(body.complexity || '').slice(0, 40) : ''),
+      impactScope: (body.requestBonus ? String(body.impactScope || '').slice(0, 40) : ''),
       bizKey: isDec ? ('dec|' + body.orderNo) : ''
     };
     DB.daily.push(rec);
@@ -1024,6 +1052,39 @@ async function handleApi(req, res, pathname){
     audit(user, 'daily-points', '点数 ' + old + ' → ' + pts + '（记录 ' + rec.id + '：' + rec.agent + ' ' + (rec.date || '') + ' ' + rec.type + ' ' + (rec.orderNo || '') + '）');
     saveDBNow(DB);
     return send(res, 200, { ok: true, record: rec });
+  }
+
+  /* 删除单条工作量记录（「工作量点数 → 录入明细」里的删除按钮）。
+     场景：2026-10-13 刘敏制作 SOP 时因按钮未禁用连点两次，落了两条完全相同的记录，各 +5 分，需要删掉一条。
+
+     ⚠️ 边界（刻意为之，别顺手扩）：
+     ① 权限：**只有管理员**能删（与 /api/daily/points 改分同口径）。业务人员前端看不到删除按钮，
+        这里再兜一层 403 —— 记录一旦删掉不可从前端恢复，不能让录入人自己清台账。
+     ② 只从 DB.daily 里 splice，**绝不触碰 DB.workOrders / DB.config / DB.users**。
+        删一条 SOP/文件整理类记录是纯粹"台账回退"，不影响工单任何字段。
+     ③ **不回滚工单进度**：若删的是 wt_reg（注册步骤）类记录，工单上已应用的步骤**保留**
+        （与 mergeImportedOrder "进度只进不退"一致）。要回退步骤得走工单详情页，不在这里做。
+     ④ **不删凭证文件**：uploads/ 下的附件留成孤儿（历史踩过"uploads 被清空导致下载 404"的坑），
+        且同一文件名可能被别的记录引用，误删代价远大于留一份垃圾。
+     ⑤ 被删记录**完整留墓碑**到 audit.log（JSON 一行），出问题可人工还原。 */
+  if (pathname === '/api/daily/delete' && req.method === 'POST') {
+    /* 入参健壮性：畸形请求体返回 400，不要让 JSON.parse 抛到最外层变成 500。
+       删除是危险操作，前端拿到的必须是明确的"为什么要你重来"。 */
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; }
+    catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    if (!body.id || typeof body.id !== 'string') return send(res, 400, { error: '缺少记录 id' });
+    if (!isAdminLike(user)) {
+      audit(user, 'daily-delete-denied', '非管理员尝试删除工作量记录，已拒绝（id=' + String(body.id) + '）');
+      return send(res, 403, { error: '只有管理员可以删除工作量记录' });
+    }
+    const i = DB.daily.findIndex(d => d.id === body.id);
+    if (i < 0) return send(res, 404, { error: '记录不存在（可能已被删除，先刷新页面）' });
+    const [rec] = DB.daily.splice(i, 1);
+    /* 墓碑：整条记录原样落审计（detail 里嵌 JSON），便于事后人工补回 */
+    audit(user, 'daily-delete', '删除工作量记录 ' + rec.id + '｜' + JSON.stringify(rec).slice(0, 1500));
+    saveDBNow(DB);
+    return send(res, 200, { ok: true, removed: 1, id: rec.id, dailyNow: DB.daily.length });
   }
 
   // 更新基础配置
@@ -1318,7 +1379,7 @@ server.on('error', (e) => {
 });
 server.listen(PORT, () => {
   console.log('欧洲EPR控制台已启动 → http://localhost:' + PORT);
-  console.log('默认账号：admin / admin123（管理员）。其他账号请用管理员在「基础配置 → 员工账号」中创建。');
+  console.log('默认账号：admin（管理员）· 初始口令取环境变量 EPR_BOOTSTRAP_ADMIN_PW（未设置则用内置默认值）· 登录后请立即修改。');
   /* 工单系统自动同步：按 secrets.json 的配置起定时器。
      未配置凭据 / 未开启自动同步 → 一律静默跳过，主功能完全不受影响。
      ⚠️ 启动补跑也只在"开启了自动同步"时才做 —— 否则用户只是填了凭据、

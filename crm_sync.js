@@ -188,6 +188,76 @@ function mapRecord(raw, decrypt) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   响应体读取 + JSON 解析（带现场诊断）
+   ──────────────────────────────────────────────────────────────────
+   背景（2026-10-13 线上故障）：云端沙箱跑同步时报
+     "Unexpected non-whitespace character after JSON at position 102 (line 1 column 103)"
+   但**本机用同一份代码、同一凭据、同一地址跑全链路完全正常**（含 616KB 的 gzip 分页响应）。
+   为定位"云端到底收到了什么"，这里做两件事：
+
+   ① **容错重解析**：若报错形如 "...after JSON at position N"，说明前 N 个字符本身
+      已构成一个完整 JSON（典型成因：响应粘连 / 尾部多余字节）→ 取前 N 字符重解析。
+      语义安全：我们永远只想要响应里的**第一个** JSON 文档。
+   ② **带现场的错误信息**：失败时抛出 HTTP 状态 / content-type / content-encoding /
+      响应长度 / 解析失败位置 / 首字符类别 / 尾部残留长度。
+
+   ⚠️ 安全红线：**绝不把响应正文放进错误信息**。
+      `/sys/getEncryptedString` 的响应里有 AES 解密密钥，`queryPageList` 的响应里有客户 PII，
+      token 响应里有 JWT。所以这里只输出「结构特征」，一个正文字符都不带。
+   ══════════════════════════════════════════════════════════════════ */
+function charClass(ch) {
+  if (ch === undefined) return '(空)';
+  const c = ch.charCodeAt(0);
+  if (c === 0xfeff) return 'BOM(U+FEFF)';
+  if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return '控制字符(U+' + c.toString(16).toUpperCase().padStart(4, '0') + ')';
+  if (ch === '{') return '左花括号 {';
+  if (ch === '[') return '左方括号 [';
+  if (ch === '<') return '尖括号 <（HTML 而非 JSON）';
+  if (/\s/.test(ch)) return '空白字符';
+  if (/[A-Za-z]/.test(ch)) return '字母';
+  if (/[0-9]/.test(ch)) return '数字';
+  return '其他(U+' + c.toString(16).toUpperCase().padStart(4, '0') + ')';
+}
+/**
+ * 洗掉 V8 JSON.parse 错误消息里嵌入的原文片段。
+ * V8 会这么写：Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+ *                                   ^^^^^^^^^^^^ 这里是输入正文的前若干字符
+ * 虽然我们的三个接口正文都以 `{` 开头（片段无敏感内容），但「错误信息里出现响应正文」
+ * 本身就不该有 —— 统一剥成 "…"，只保留「错误类型 + 位置」。
+ */
+function safeParseError(raw) {
+  return String(raw == null ? '' : raw)
+    .replace(/"[^"]*"/g, '"…"')        // 双引号片段（V8 嵌的输入原文）
+    .replace(/'[^']{2,}'/g, "'…'")     // 单引号片段中长度 >1 的（保留 '<' 这类单字符，有诊断价值）
+    .slice(0, 200);
+}
+async function readJson(res, label) {
+  const text = await res.text();
+  const meta = 'HTTP ' + res.status
+    + ' · content-type=' + (res.headers.get('content-type') || '-')
+    + ' · content-encoding=' + (res.headers.get('content-encoding') || '-')
+    + ' · 长度=' + text.length;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const raw = String((e && e.message) || e);
+    const m = /position (\d+)/.exec(raw);
+    const pos = m ? Number(m[1]) : -1;
+    /* ① 容错：前 pos 个字符若本身是完整 JSON，就用它（响应粘连 / 尾部多余字节） */
+    if (pos > 0 && pos < text.length) {
+      try { return JSON.parse(text.slice(0, pos)); } catch (e2) { /* 落到下面抛错 */ }
+    }
+    /* ② 失败：只报结构特征，不带正文 */
+    const trail = pos > 0 ? (text.length - pos) : -1;
+    throw new Error('响应不是合法 JSON（' + (label || '未知接口') + '）：' + safeParseError(raw)
+      + '【' + meta
+      + ' · 首个非空白字符=' + charClass(text.replace(/^\s+/, '').charAt(0))
+      + (pos > 0 ? (' · 解析断点后还剩 ' + trail + ' 字符') : '')
+      + ' · 含 NUL=' + (text.indexOf('\u0000') >= 0) + '】');
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
    客户端
    ══════════════════════════════════════════════════════════════════ */
 class CrmSync {
@@ -281,7 +351,7 @@ class CrmSync {
     const r = await this._request('POST', '/open/auth/token', {
       clientId: this._cid, timestamp: ts, sign: this._sign(ts),
     });
-    const j = await r.json();
+    const j = await readJson(r, '换取令牌 /open/auth/token');
     if (!j || !j.success) throw new Error('换取令牌失败：' + ((j && j.message) || '未知'));
     this._token = j.result.token;
     this._tokenUser = j.result.username;
@@ -300,7 +370,7 @@ class CrmSync {
     await this.ensureToken();
     const r = await this._request('GET', '/sys/getEncryptedString',
       { 'X-Access-Token': this._token });
-    const j = await r.json();
+    const j = await readJson(r, '取解密密钥 /sys/getEncryptedString');
     const R = j && j.result;
     if (!R) throw new Error('取解密密钥失败');
     if (typeof R === 'string') {
@@ -321,7 +391,7 @@ class CrmSync {
     const r = await this._request('GET',
       `/work/orderRegister/queryPageList?pageNo=${Number(pageNo)}&pageSize=${ps}`,
       { 'X-Access-Token': this._token });
-    const j = await r.json();
+    const j = await readJson(r, '拉取工单 /work/orderRegister/queryPageList');
     if (!j || !j.success) throw new Error('拉取工单失败：' + ((j && j.message) || '未知'));
     const res = j.result || {};
     const records = res.records || res.list || res.rows || [];
@@ -358,6 +428,6 @@ class CrmSync {
 }
 
 module.exports = {
-  CrmSync, guard, normalizePath, makeDecryptor, mapRecord, mask, scrub,
+  CrmSync, guard, normalizePath, makeDecryptor, mapRecord, mask, scrub, readJson, charClass, safeParseError,
   ALLOWED_ENDPOINTS, FORBIDDEN_HINTS, FIELD_MAP,
 };

@@ -18,6 +18,9 @@ uploads/*
 sessions.json
 audit.log
 audit.log.*
+# 同步运行成果（时间戳/计数/已 scrub 的错误文本，不含凭据；但属运行时状态，不入库）
+sync_state.json
+sync_state.json.tmp
 
 # --- 日志 / 进程文件 ---
 *.log

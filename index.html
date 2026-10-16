@@ -430,7 +430,7 @@
 <div class="login" id="login">
   <div class="box">
     <h2>欧洲EPR合规交付控制台</h2>
-    <div class="sub">多人协作版 · <span class="ver">v1.26</span> · 登录后可见系统内全部数据</div>
+    <div class="sub">多人协作版 · <span class="ver">v1.31</span> · 登录后可见系统内全部数据</div>
     <div class="err" id="loginErr"></div>
     <div class="field"><label>账号</label><input id="loginUser" placeholder="请输入账号" autofocus></div>
     <div class="field"><label>密码</label><input id="loginPw" type="password" placeholder="请输入密码"></div>
@@ -443,7 +443,7 @@
   <aside class="sidebar">
     <div class="logo">
       <div class="dot">E</div>
-      <div><b>EPR 交付控制台</b><span class="ver">v1.26</span><small>欧洲合规 · 工作量管理</small></div>
+      <div><b>EPR 交付控制台</b><span class="ver">v1.31</span><small>欧洲合规 · 工作量管理</small></div>
     </div>
     <nav class="nav" id="nav">
       <button data-page="dash" class="active"><span class="ico">▦</span>驾驶舱看板</button>
@@ -455,7 +455,7 @@
       <button data-page="report"><span class="ico">📊</span>数据报表</button>
       <button data-page="log"><span class="ico">📋</span>系统日志</button>
     </nav>
-    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.26</span><br>数据存于服务端</div>
+    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.31</span><br>数据存于服务端</div>
   </aside>
 
   <div class="main">
@@ -1986,6 +1986,16 @@ function paintSync(st){
   }
 
   const r = st.lastResult || null;
+  /* 需求（2026-10-15 用户反馈）：「上一次的运行成果」要**一直显示** —— 成功 / 失败 / 尚未执行。
+     服务端已把它落盘（sync_state.json），所以沙箱冷启动、重新部署后依然看得到，
+     不会再出现"明明跑过却显示尚未执行"。
+     兼容：老服务端不返回 lastOutcome 时按 lastRunAt+lastError 兜底推算。 */
+  const outcome = st.lastOutcome || (st.lastRunAt ? (st.lastError ? 'fail' : 'ok') : null);
+  const outcomeHtml = outcome==='ok'
+    ? '<b style="color:var(--green-dark,#15803d)">成功</b>'
+    : (outcome==='fail'
+      ? '<b style="color:var(--red,#b91c1c)">失败</b>'
+      : '<b style="color:var(--muted);font-weight:600">尚未执行</b>');
   let h = '<div style="display:flex;flex-wrap:wrap;gap:10px 26px;font-size:13px;margin-bottom:12px">'
     + '<div>接口地址：<b>'+esc(st.baseUrl||'-')+'</b></div>'
     + '<div>凭据：<b>'+(st.hasClientId?'已配置':'未配置')+'</b> <span class="mini">（出于安全考虑，界面不显示账号任何片段）</span></div>'
@@ -1994,11 +2004,20 @@ function paintSync(st){
       /* 需求（2026-10-14 用户反馈）：**失败了不显示运行时间**——失败时的"用时"没有意义
          （失败往往几十秒就中断，看着像"跑得快"反而误导）。只有成功才追加「（用时 N 秒）」。 */
       +((st.lastRunAt&&st.lastDurationMs&&!st.lastError)?('（用时 '+(st.lastDurationMs/1000).toFixed(1)+' 秒）'):'')+'</b></div>'
+    + '<div>上次结果：'+outcomeHtml
+      +(st.lastTrigger?(' <span class="mini">（'+(st.lastTrigger==='manual'?'手动':(st.lastTrigger==='auto'?'自动':'启动补跑'))+'）</span>'):'')+'</div>'
     + '<div>下次自动运行：<b>'+(st.nextRunAt?esc(fmtDateTime(st.nextRunAt)):'—')+'</b></div>'
     + '</div>';
   if(st.running) h+='<div class="mini" style="color:var(--amber);margin-bottom:8px">⏳ 正在同步中…正在全量拉取，请稍候（本页会自动刷新结果）</div>';
   if(st.lastError) h+='<div class="mini" style="color:var(--red,#b91c1c);margin-bottom:8px">⚠ 上次同步失败：'+esc(st.lastError)+'</div>';
+  /* 最近一次是失败时，把「上次成功」也摆出来 —— 否则只看到失败，不知道上一次成功是多久以前
+     （这一条也落盘持久化，冷启动后不丢） */
+  if(st.lastError && st.lastSuccessAt) h+='<div class="mini" style="margin-bottom:8px">上次成功：'+esc(fmtDateTime(st.lastSuccessAt))
+    +((st.consecutiveFailures>1)?(' · 已连续失败 '+st.consecutiveFailures+' 次'):'')+'</div>';
   if(r) h+='<div style="background:#f6f9fd;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:12px">'
+    /* ⚠️ 失败时 lastResult 里留着的仍是**上一次成功**的数字（失败不改它）。
+       必须写明是哪一次的结果，否则"上次失败 + 一堆漂亮的数字"会让人以为这是失败那次的成果。 */
+    + ((st.lastError&&st.lastSuccessAt)?('<div class="mini" style="font-weight:700;margin-bottom:4px">以下数字来自 '+esc(fmtDateTime(st.lastSuccessAt))+' 那次成功（最近一次是失败的）</div>'):'')
     + '拉取 <b>'+(r.fetched||0).toLocaleString()+'</b> 条（远端共 '+(r.remoteTotal||0).toLocaleString()+'）· '
     + '新增 <b style="color:var(--green-dark,#15803d)">'+(r.added||0)+'</b> · 更新 <b>'+(r.updated||0)+'</b>'
     + ((r.keptProgress)?' · <span style="color:var(--green-dark,#15803d)">保留人工进度 '+r.keptProgress+'</span>':'')
@@ -2286,9 +2305,21 @@ function renderEntry(){
 
   // 三 Tab：注册录入 / 申报录入 / 其他工作
   const declaredSet = new Set(DB.daily.filter(d=>d.type==='wt_dec').map(d=>d.orderNo));
-  const doneOrders = orders.filter(o=>o.status==='已下证');
+  /* 2026-10-15 需求：申报录入的数据池由「仅已下证」扩展为
+     **已下证 + 注册中 + 待下证** 三种状态 —— 状态筛选下拉里随之出现这三项
+     （statusOptionsOf 只列池子里真实存在的状态，所以池子扩了，选项自动多出来）。
+     口径不变的两点：①已在 daily 里记过 wt_dec 的工单不再出现在本列表；
+     ②提交仍是每条记一条申报工作量，同一工单只记一次。 */
+  const DECL_STATUSES = ['注册中','待下证','已下证'];
+  const doneOrders = orders.filter(o=>DECL_STATUSES.indexOf(o.status)>=0);
   const pendingDecl = doneOrders.filter(o=>!declaredSet.has(o.orderNo));
   const declaredCnt = doneOrders.length - pendingDecl.length;
+  /* 卡片上的「注册状态」pill 随真实状态变色（池子里现在有三种状态，不能再写死「已下证」） */
+  const declStatusPill = s => ({'已下证':'p-green','待下证':'p-amber','注册中':'p-blue'}[s] || 'p-gray');
+  /* 状态下拉：**固定列出 注册中 / 待下证 / 已下证 三项**（即使某个状态当前一条待申报都没有，
+     选项也仍在，避免"选项时有时无"让人以为漏了）；池里若意外出现别的状态也一并带上。 */
+  const declStatusOptions = list => STATUS_ORDER.filter(s=>DECL_STATUSES.indexOf(s)>=0)
+    .concat(statusOptionsOf(list).filter(s=>DECL_STATUSES.indexOf(s)<0));
 
   const tabsHtml = `
   <div class="entry-tabs">
@@ -2309,7 +2340,7 @@ function renderEntry(){
         <div class="entry-tab-title">申报录入</div>
         <div class="entry-tab-meta">
           <span class="pill p-blue">待申报 ${pendingDecl.length.toLocaleString()}</span>
-          <span class="mini">已申报 ${declaredCnt.toLocaleString()} · 自动从已下证工单导入</span>
+          <span class="mini">已申报 ${declaredCnt.toLocaleString()} · 自动从 已下证 / 注册中 / 待下证 的工单导入</span>
         </div>
       </div>
     </button>
@@ -2452,11 +2483,11 @@ function renderEntry(){
        数据池固定为「已下证 且 尚未申报」的工单（口径与原来一致）。 */
     const decFilterIds = {countryId:'fDecCountry',serviceId:'fDecService',statusId:'fDecStatus',agentId:'fDecAgent',customerNoId:'fDecCustomerNo',orderNoId:'fDecOrderNo',companyId:'fDecCompany',resetId:'fDecReset',confirmId:'fDecConfirm'};
     el.innerHTML = tabsHtml + `
-    <div class="sec-head"><span class="num">②</span><h2>申报录入</h2><span class="mini">已完成下证的工单 → 勾选后批量标记为"申报完成"</span></div>
+    <div class="sec-head"><span class="num">②</span><h2>申报录入</h2><span class="mini">已下证 / 注册中 / 待下证 的工单 → 勾选后批量标记为"申报完成"</span></div>
     <div class="card">
-      <h3>申报进度录入 <span class="pill p-blue" id="decCount">${pendingDecl.length} 工单</span> <span class="mini">已申报 ${declaredCnt} 个 · 列表仅含"已下证且尚未申报"的工单</span></h3>
-      <div class="hint" style="margin-bottom:12px">支持按国家、项目、状态、代理、客户编号、客户中文名称、工单号筛选；勾选后可统一标记为"申报完成"（每条记一条申报工作量）。</div>
-      ${buildFilterBar({countries,services,statuses:statusOptionsOf(pendingDecl),agents,customerNos,companies,ids:decFilterIds})}
+      <h3>申报进度录入 <span class="pill p-blue" id="decCount">${pendingDecl.length} 工单</span> <span class="mini">已申报 ${declaredCnt} 个 · 列表含"已下证 / 注册中 / 待下证 且尚未申报"的工单</span></h3>
+      <div class="hint" style="margin-bottom:12px">支持按国家、项目、<b>状态（已下证 / 注册中 / 待下证）</b>、代理、客户编号、客户中文名称、工单号筛选；勾选后可统一标记为"申报完成"（每条记一条申报工作量）。</div>
+      ${buildFilterBar({countries,services,statuses:declStatusOptions(pendingDecl),agents,customerNos,companies,ids:decFilterIds})}
       <div class="batch-bar" id="decBatchBar" style="display:flex">
         <label class="check-cell"><input type="checkbox" id="decCheckAll"> 全选</label>
         <span class="mini" id="decSelCount">已选 0 个</span>
@@ -2494,7 +2525,7 @@ function renderEntry(){
             <div class="info-chip xs"><b>代理</b><span>${esc(o.agent||'-')}</span></div>
             <div class="info-chip xs"><b>客户编号</b><span>${esc(o.customerNo||'-')}</span></div>
             <div class="info-chip xs"><b>国家 / 项目</b><span>${esc(o.country)} · ${esc(o.serviceItem)}</span></div>
-            <div class="info-chip xs"><b>注册状态</b><span class="pill p-green">已下证</span></div>
+            <div class="info-chip xs"><b>注册状态</b><span class="pill ${declStatusPill(o.status)}">${esc(o.status||'-')}</span></div>
             <div class="info-chip xs"><b>申报状态</b><span class="pill p-amber">待申报</span></div>
           </div>
         </div>
@@ -2517,7 +2548,8 @@ function renderEntry(){
       wrap.querySelectorAll('.dec-check').forEach(cb=>{
         cb.onchange=()=>{ if(cb.checked) decSel.add(cb.dataset.no); else decSel.delete(cb.dataset.no); decUpdateSel(); };
       });
-      wrap.querySelectorAll('.ord-main').forEach(c=>c.onclick=()=>openEntryModal(c.dataset.no));
+      /* 2026-10-15 需求①：申报录入卡片点开的是精简版弹窗（mode='dec'） */
+      wrap.querySelectorAll('.ord-main').forEach(c=>c.onclick=()=>openEntryModal(c.dataset.no,'dec'));
       const mb=wrap.querySelector('#decMoreBtn');
       if(mb) mb.onclick=()=>{ decRendered=next; decPaint(); };
       $('#decList').appendChild(wrap);
@@ -2607,7 +2639,7 @@ function openBatchStepModal(orderNos){
   const selected=new Set([1]); // 默认选中第1步，支持多选
   $('#modal').innerHTML=`
     <h3>批量录入注册步骤 <span class="pill p-amber">${orderNos.length} 个工单</span></h3>
-    <div class="hint" style="margin-bottom:12px">将为 ${orderNos.length} 个工单统一记录今日完成的步骤。<br><span class="mini">可勾选多个步骤，保存时按步骤顺序依次写入。不同国家/项目的步骤名称可能不同，请以下方步骤为准。</span></div>
+    <div class="hint" style="margin-bottom:12px">将为 ${orderNos.length} 个工单统一记录今日完成的步骤。<br><span class="mini">可勾选多个步骤，保存时按步骤顺序依次写入。不同国家/项目的步骤名称可能不同，请以下方步骤为准。<br><b>后面的步骤已完成的工单，更前面的步骤会被锁定跳过（不补录、不重复赋分）。</b></span></div>
     <div class="step-grid" id="batchStepGrid">
       ${steps.map((s,i)=>`<div class="step-item ${selected.has(i+1)?'selected':''}" data-step="${i+1}">
         <span class="step-no">${i+1}</span><span class="step-txt">${esc(s)}</span>
@@ -2646,11 +2678,11 @@ function openBatchStepModal(orderNos){
     const sortedSteps=[...selected].sort((a,b)=>a-b);
     /* 性能：改为一次批量请求。原来是「工单数 × 步骤数」次串行 await，
        选 100 个工单 × 3 个步骤就是 300 次 HTTP，界面会卡死；现在服务端一次处理完。 */
-    let ok=0, fail=0, awarded=0, skipped=0;
+    let ok=0, fail=0, awarded=0, skipped=0, locked=0;
     try{
       const r = await api('/api/order/steps/batch',{method:'POST',body:JSON.stringify({orderNos, steps:sortedSteps, note, date:today()})});
       ok = r.okCount||0; fail = r.failCount||0;
-      awarded = r.awarded||0; skipped = r.skipped||0;
+      awarded = r.awarded||0; skipped = r.skipped||0; locked = r.locked||0;
     }catch(e){ fail = orderNos.length; }
     await loadState(); closeModal();
     if(fromPage==='entry'){
@@ -2669,7 +2701,8 @@ function openBatchStepModal(orderNos){
       go(fromPage);
     }
     toast('批量保存完成：成功 '+ok+' / 失败 '+fail
-      +'　记分 '+awarded+' 步'+(skipped?('（'+skipped+' 步已记过分，未重复赋分）'):''));
+      +'　记分 '+awarded+' 步'+(skipped?('（'+skipped+' 步已记过分，未重复赋分）'):'')
+      +(locked?('（'+locked+' 步因后面的步骤已完成被锁定跳过）'):''));
   };
   updateStepSelection();
 }
@@ -2989,8 +3022,13 @@ function renderOther(){
   };
 }
 
-function openEntryModal(orderNo){
+function openEntryModal(orderNo, mode){
   const o=DB.workOrders.find(x=>x.orderNo===orderNo); if(!o) return;
+  /* mode==='dec' = 从「申报录入」卡片点开（精简版）；不传 mode = 注册录入（原样） */
+  const isDec = mode === 'dec';
+  /* 2026-10-15 需求①：申报录入弹窗精简 —— 标题改「录入申报进度」，中间整块
+     （已完成步数卡 / 注册进度条 / 注册步骤选择区）不渲染，只留工单信息 + 说明，按钮改「完成」。
+     注册录入不传 mode，保持原样。 */
   const steps=getSteps(o.country,o.serviceItem);
   const {total,done,remain}=realProgress(o);
   const pct = total ? Math.round(done/total*100) : 0;
@@ -2999,9 +3037,8 @@ function openEntryModal(orderNo){
   if (done < total) selected.add(done+1);
   function stepDate(n){ const h=(o.history||[]).filter(x=>x.step===n).pop(); return h?h.date:''; }
   function orderedSel(){ return [...selected].sort((a,b)=>a-b); }
-  $('#modal').innerHTML=`
-    <h3>录入注册进度 · ${esc(o.companyCn||o.companyEn)}</h3>
-    ${orderInfoChips(o)}
+  /* 中间整块（已完成步数卡 + 注册进度条 + 注册步骤选择区）：申报模式下整体不渲染 */
+  const progressBlockHtml = isDec ? '' : `
     <div style="display:flex;gap:16px;align-items:stretch;margin:14px 0 16px">
       <div style="flex:0 0 auto;min-width:150px;display:flex;flex-direction:column;justify-content:center;align-items:center;background:linear-gradient(135deg,#2563eb,#1d4ed8);border-radius:16px;padding:14px 18px;box-shadow:0 10px 28px rgba(37,99,235,.28)">
         <div style="color:#dbe9ff;font-size:13px;font-weight:700;letter-spacing:.5px">已完成</div>
@@ -3023,7 +3060,7 @@ function openEntryModal(orderNo){
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin:0 0 12px;color:var(--green-dark);font-size:13px;font-weight:700">
-      <span style="width:10px;height:10px;border-radius:3px;background:var(--green);display:inline-block"></span> 注册步骤（点击切换"今日完成"步骤，可一次选多个，灰色 = 已完成，右下角显示完成时间）
+      <span style="width:10px;height:10px;border-radius:3px;background:var(--green);display:inline-block"></span> 注册步骤（点击切换"今日完成"步骤，可一次选多个，灰色 = 已完成，右下角显示完成时间；<b>后面的步骤完成后，前面的步骤不能再补录</b>）
     </div>
     <div class="step-grid" id="stepGrid">
       ${steps.map((s,i)=>{
@@ -3034,15 +3071,39 @@ function openEntryModal(orderNo){
           ${isDone?`<span class="step-ck">✓</span>${sd?`<span class="step-when">${esc(sd.slice(5))}</span>`:''}`:''}
         </div>`;
       }).join('')}
-    </div>
+    </div>`;
+  const saveBtnLabel = isDec ? '完成' : '保存进度（已选 <b id="selCount" style="color:var(--green-dark)">'+selected.size+'</b> 个步骤）';
+  $('#modal').innerHTML=`
+    <h3>${isDec?'录入申报进度':'录入注册进度'} · ${esc(o.companyCn||o.companyEn)}</h3>
+    ${orderInfoChips(o)}
+    ${progressBlockHtml}
     <div class="field" style="margin-bottom:16px">
-      <label>说明（可选 · 多个步骤共用）</label>
-      <textarea id="stepNote" rows="2" placeholder="如：已提交申请，等待官方审核"></textarea>
+      <label>说明（${isDec?'可选':'可选 · 多个步骤共用'}）</label>
+      <textarea id="stepNote" rows="2" placeholder="${isDec?'如：已完成申报提交':'如：已提交申请，等待官方审核'}"></textarea>
     </div>
     <div class="row" style="justify-content:flex-end;gap:8px">
       <button class="btn" id="mCancel">取消</button>
-      <button class="btn primary" id="mSave">保存进度（已选 <b id="selCount" style="color:var(--green-dark)">${selected.size}</b> 个步骤）</button>
+      <button class="btn primary" id="mSave">${saveBtnLabel}</button>
     </div>`;
+  $('#modalBg').classList.add('show');
+  $('#mCancel').onclick=closeModal;
+  if(isDec){
+    /* 申报：一条工单只记一次申报分（服务端按 wt_dec+工单号去重，重复提交返回 409 duplicate） */
+    $('#mSave').onclick=async()=>{
+      const note=$('#stepNote').value;
+      try{
+        await api('/api/daily',{method:'POST',body:JSON.stringify({
+          type:'wt_dec', country:o.country, serviceItem:o.serviceItem, orderNo:orderNo, note:note })});
+        await loadState(); closeModal();
+        toast('申报完成：'+orderNo);
+        entryTab='decl';
+        if(currentPage()==='entry') renderEntry(); else go('entry');
+      }catch(e){
+        toast('保存失败：'+((e&&e.data&&e.data.duplicate)?'该工单已完成申报记分，不能重复赋分':e.message));
+      }
+    };
+    return;
+  }
   function updateStepSel(){
     $('#stepGrid').querySelectorAll('.step-item').forEach(it=>{
       const n=+it.dataset.step;
@@ -3060,9 +3121,7 @@ function openEntryModal(orderNo){
     if(selected.has(n)) selected.delete(n); else selected.add(n);
     updateStepSel();
   });
-  $('#modalBg').classList.add('show');
   updateStepSel();
-  $('#mCancel').onclick=closeModal;
   $('#mSave').onclick=async()=>{
     if(!selected.size){ toast('请先选择至少一个步骤'); return; }
     const note=$('#stepNote').value;
@@ -3071,9 +3130,10 @@ function openEntryModal(orderNo){
       /* 性能：原来每个步骤一次 await 请求，改为一次批量请求完成 */
       const r = await api('/api/order/steps/batch',{method:'POST',body:JSON.stringify({orderNos:[orderNo], steps:stepsArr, note, date:today()})});
       await loadState(); closeModal();
-      const awarded=r.awarded||0, skipped=r.skipped||0;
+      const awarded=r.awarded||0, skipped=r.skipped||0, locked=r.locked||0;
       toast('已提交 '+stepsArr.length+' 个步骤（第 '+stepsArr.join(', ')+' 步），记分 '+awarded
-        +(skipped?('（'+skipped+' 步此前已记过分，未重复赋分）'):''));
+        +(skipped?('（'+skipped+' 步此前已记过分，未重复赋分）'):'')
+        +(locked?('（'+locked+' 步因后面的步骤已完成被锁定，未补录）'):''));
       go('entry');
     }catch(e){ toast('保存失败：'+e.message); }
   };
@@ -3244,10 +3304,36 @@ function openAgentDetail(agentName, recs, rangeTxt){
       <tbody>${rowsHtml}</tbody></table>
     </div>
     <div class="row" style="justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" id="agDetailTxt" title="把下方「操作明细」导出为 TXT（不含凭证列）">下载 TXT</button>
       <button class="btn" id="agDetailClose">关闭</button>
     </div>`;
   $('#modalBg').classList.add('show');
   $('#agDetailClose').onclick=closeModal;
+  /* 2026-10-15 需求③：把「操作明细」导出成 TXT（TSV，Excel 可直接打开）。
+     列 = 日期 / 类型 / 国家·项目 / 关联工单 / 点数 / 说明 —— 与页面表格一致，**不含凭证列**。 */
+  $('#agDetailTxt').onclick=()=>{
+    if(!rows.length){ toast('该时间段暂无记录，没有可下载的内容'); return; }
+    const cell=v=>String(v==null?'':v).replace(/[\t\r\n]+/g,' ');
+    const lines=[['日期','类型','国家 / 项目','关联工单','点数','说明'].join('\t')];
+    rows.forEach(r=>{
+      lines.push([
+        cell(r.date||'-'),
+        cell(workTypeName(r.type,r.country,r.agent)+(r.cross?'（跨岗）':'')),
+        cell((r.country||'-')+(r.serviceItem?(' / '+r.serviceItem):'')),
+        cell(r.orderNo||'-'),
+        cell('+'+(r.points||0)),
+        cell(r.note||'')
+      ].join('\t'));
+    });
+    /* 带 BOM：记事本 / Excel 打开中文不乱码 */
+    const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/plain;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download='点数明细_'+agentName+'_'+String(rangeTxt||'全部').replace(/[\\\/:*?"<>|]/g,'-')+'.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
   $('#modal').querySelectorAll('[data-evi]').forEach(b=>{ if(b.dataset.evi) b.onclick=()=>downloadEvidence(b.dataset.evi, b, b.dataset.eviname); });
   $('#modal').querySelectorAll('[data-evpreview]').forEach(b=>{ if(b.dataset.evpreview) b.onclick=()=>openEvidencePreview(b.dataset.evpreview, b.dataset.eviname); });
 }

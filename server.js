@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.26';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.31';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------
@@ -54,12 +54,51 @@ function saveSecrets(obj){
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, SECRETS_FILE);
 }
-/* 同步运行状态（**只放非敏感信息**，可安全返回给管理员） */
+/* 同步运行状态（**只放非敏感信息**，可安全返回给管理员）
+   ⭐ 2026-10-15 需求：「上一次的运行成果」要**一直显示**（成功/失败、什么时候跑的、拉了多少条）。
+   原先这些只在内存里 → 云端沙箱一冷启动就清空，界面永远显示「最近一次：尚未执行」，
+   管理员根本看不出同步到底跑没跑过、是成功还是失败。
+   现在每次运行结束都写 sync_state.json，启动时读回来。
+   ⚠️ 安全边界（三条都不能破）：
+      ① 这里只存 时间戳 / 计数 / **已 scrub 过**的错误文本 —— 不含任何凭据；
+      ② sync_state.json 不进版本库（.gitignore）、不进发布包（发布前校验会拦）；
+      ③ /api/backup 与 /api/state 只读 data.json，天然带不走它。 */
+const SYNC_STATE_FILE = path.join(ROOT, 'sync_state.json');
+/* 需要落盘的字段（nextRunAt 不落盘：它是"定时器武装时刻+间隔"的推算值，
+   冷启动后必然重算，存下来只会显示一个过去的假时间） */
+const SYNC_PERSIST_FIELDS = ['lastRunAt', 'lastTrigger', 'lastResult', 'lastError',
+  'lastDurationMs', 'consecutiveFailures', 'lastSuccessAt'];
 let SYNC_STATE = {
   enabled: false, running: false,
   lastRunAt: null, lastTrigger: null, lastResult: null, lastError: null,
-  nextRunAt: null, consecutiveFailures: 0, lastDurationMs: null
+  nextRunAt: null, consecutiveFailures: 0, lastDurationMs: null,
+  /* 最近一次**成功**的时间：失败时「最近一次」是失败时间，但"上次成功是什么时候"同样有用 */
+  lastSuccessAt: null
 };
+function loadSyncState(){
+  try {
+    if (!fs.existsSync(SYNC_STATE_FILE)) return;
+    const s = JSON.parse(fs.readFileSync(SYNC_STATE_FILE, 'utf8'));
+    if (!s || typeof s !== 'object') return;
+    for (const k of SYNC_PERSIST_FIELDS) if (s[k] !== undefined && s[k] !== null) SYNC_STATE[k] = s[k];
+    console.log('[sync] 已读回上次运行成果：' + (SYNC_STATE.lastError ? '失败' : (SYNC_STATE.lastRunAt ? '成功' : '无记录'))
+      + (SYNC_STATE.lastRunAt ? '（' + SYNC_STATE.lastRunAt + '）' : ''));
+  } catch (e) { /* 文件损坏就当没有，主功能不受影响 */ }
+}
+function saveSyncState(){
+  try {
+    const o = {};
+    for (const k of SYNC_PERSIST_FIELDS) o[k] = SYNC_STATE[k];
+    const tmp = SYNC_STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(o, null, 2), 'utf8');
+    fs.renameSync(tmp, SYNC_STATE_FILE);
+  } catch (e) { console.error('[sync] 运行成果落盘失败：', e && e.message); }
+}
+function clearSyncState(){
+  try { if (fs.existsSync(SYNC_STATE_FILE)) fs.unlinkSync(SYNC_STATE_FILE); } catch (e) { /* 忽略 */ }
+  for (const k of SYNC_PERSIST_FIELDS) SYNC_STATE[k] = (k === 'consecutiveFailures' ? 0 : null);
+}
+loadSyncState();
 let _syncTimer = null;
 let CRMSYNC = null;
 try { CRMSYNC = require('./crm_sync.js'); } catch (e) { CRMSYNC = null; }
@@ -661,7 +700,12 @@ function syncPublicStatus(){
     lastError: SYNC_STATE.lastError,
     lastDurationMs: SYNC_STATE.lastDurationMs,
     nextRunAt: SYNC_STATE.nextRunAt,
-    consecutiveFailures: SYNC_STATE.consecutiveFailures
+    consecutiveFailures: SYNC_STATE.consecutiveFailures,
+    /* 最近一次成功的时间（落盘持久化，跨冷启动保留） */
+    lastSuccessAt: SYNC_STATE.lastSuccessAt,
+    /* 上次运行成果：'ok' 成功 / 'fail' 失败 / null 还没有记录。
+       前端据此显示「上次结果：成功 / 失败」，不依赖 lastError 是否为空来判断。 */
+    lastOutcome: SYNC_STATE.lastRunAt ? (SYNC_STATE.lastError ? 'fail' : 'ok') : null
   };
 }
 function computeNextRun(){
@@ -703,6 +747,8 @@ async function runSync(trigger){
     SYNC_STATE.lastTrigger = trigger;
     SYNC_STATE.lastDurationMs = Date.now() - t0;
     SYNC_STATE.consecutiveFailures = 0;
+    SYNC_STATE.lastSuccessAt = SYNC_STATE.lastRunAt;   // 成功才更新「上次成功」
+    saveSyncState();                                   // ★ 落盘：跨冷启动保住"上次成果"
     computeNextRun();
     audit(null, 'sync', '工单系统同步(' + trigger + ')：拉取=' + all.records.length + ' 新增=' + st.added
       + ' 更新=' + st.updated + ' 保留进度=' + st.keptProgress + ' 保护状态=' + st.protectedStatus
@@ -717,6 +763,7 @@ async function runSync(trigger){
     SYNC_STATE.lastTrigger = trigger;
     SYNC_STATE.lastDurationMs = Date.now() - t0;
     SYNC_STATE.consecutiveFailures = (SYNC_STATE.consecutiveFailures || 0) + 1;
+    saveSyncState();                            // ★ 失败也落盘：界面上要一直看得到"上次失败了"
     computeNextRun();
     console.error('[sync] 同步失败：' + msg);   // msg 已 scrub，不含凭据
     return { ok: false, error: msg };
@@ -835,8 +882,8 @@ async function handleApi(req, res, pathname){
   if (pathname === '/api/sync/clear' && req.method === 'POST') {
     if (!isAdminLike(user)) return send(res, 403, { error: '仅管理员可操作' });
     try { if (fs.existsSync(SECRETS_FILE)) fs.unlinkSync(SECRETS_FILE); } catch (e) { /* 忽略 */ }
-    SYNC_STATE.lastResult = null; SYNC_STATE.lastError = null; SYNC_STATE.lastRunAt = null;
-    SYNC_STATE.lastTrigger = null; SYNC_STATE.lastDurationMs = null; SYNC_STATE.consecutiveFailures = 0;
+    /* 清凭据 = 这套同步从此不再属于本工作台 → 连"上次运行成果"一起清掉（含落盘文件） */
+    clearSyncState();
     startSyncTimer();
     audit(user, 'sync-config', '清除工单系统凭据');
     return send(res, 200, { ok: true, status: syncPublicStatus() });
@@ -886,14 +933,20 @@ async function handleApi(req, res, pathname){
        bizSet 是「已有的注册业务键」集合（含历史数据），历史里已有该步也一并拦住。 */
     if (o.history.some(h => Number(h.step) === Number(n)) || (bizSet && bizSet.has(bizKey))) {
       if (stat) stat.skipped++;
-      return false;
+      return 'duplicate';
+    }
+    /* 顺序锁（2026-10-15 需求）：后面的步骤一旦完成，就不允许再补录更前面的步骤 ——
+       堵住「第 2 步做完了、回头再补第 1 步」的倒序录入（也连带堵死倒序补录带来的重复赋分）。
+       UI 上「灰色 = 已完成」按最大已完成步数算，本来就点不了；这里在服务端再兜一层，
+       批量弹窗 / 直接调接口也绕不过去。 */
+    if (o.history.some(h => Number(h.step) > Number(n))) {
+      if (stat) stat.locked = (stat.locked || 0) + 1;
+      return 'locked';
     }
     o.history.push({ date: date, step: n, operator: user.displayName, note: note || '' });
     o.progressNote = (o.progressNote ? o.progressNote + '；' : '') + date.slice(5) + ' 完成第' + n + '步' + (note ? ('：' + note) : '');
-    let completedNow = false;
-    if (n >= total) { o.status = '已下证'; if (!o.certNo) o.certNo = '待补充'; completedNow = true; }
+    if (n >= total) { o.status = '已下证'; if (!o.certNo) o.certNo = '待补充'; }
     else { o.status = n <= 1 ? '待注册' : '注册中'; }
-
     /* 注册记点：**每完成一步就记 1 分**（固定，不再乘难度系数），归属实际操作人。
        工作类型固定走 wt_reg（页面叫「注册协助」）。 */
     DB.daily.push({
@@ -907,7 +960,8 @@ async function handleApi(req, res, pathname){
     });
     if (bizSet) bizSet.add(bizKey);
     if (stat) stat.awarded++;
-    return completedNow;
+    /* 返回值是处理结果状态（两个调用点都只用来区分锁定 / 重复，不依赖布尔） */
+    return 'ok';
   }
   /* 已有注册业务键集合：优先用记录上的 bizKey；兼容早期没有 bizKey 的记录（按 type+工单号+步骤兜底） */
   function collectRegBizKeys(){
@@ -931,10 +985,11 @@ async function handleApi(req, res, pathname){
     if (!n || n < 1) return send(res, 400, { error: '步骤无效' });
     const date = body.date || todayStr();
     const di = collectRegBizKeys();
-    const stat = { awarded: 0, skipped: 0 };
-    applyStepToOrder(o, n, body.note, date, user, di, stat);
+    const stat = { awarded: 0, skipped: 0, locked: 0 };
+    const st = applyStepToOrder(o, n, body.note, date, user, di, stat);
     saveDBNow(DB);
-    return send(res, 200, { ok: true, order: o, awarded: stat.awarded, skipped: stat.skipped });
+    if (st === 'locked') return send(res, 400, { error: '后面的步骤已完成，不能再补录前面的步骤', locked: true });
+    return send(res, 200, { ok: true, order: o, awarded: stat.awarded, skipped: stat.skipped, locked: stat.locked });
   }
 
   /* 批量录入注册步骤（性能关键）
@@ -957,7 +1012,7 @@ async function handleApi(req, res, pathname){
       if (o && o.orderNo != null) idx.set(String(o.orderNo), o);
     }
     const di = collectRegBizKeys();
-    const stat = { awarded: 0, skipped: 0 };
+    const stat = { awarded: 0, skipped: 0, locked: 0 };
     let okCount = 0, failCount = 0, notFound = 0;
     for (const raw of orderNos) {
       const o = idx.get(String(raw));
@@ -966,13 +1021,21 @@ async function handleApi(req, res, pathname){
       catch (e) { failCount++; }
     }
     saveDBNow(DB); // 只落盘一次
-    return send(res, 200, { ok: true, okCount, failCount, notFound, awarded: stat.awarded, skipped: stat.skipped });
+    return send(res, 200, { ok: true, okCount, failCount, notFound, awarded: stat.awarded, skipped: stat.skipped, locked: stat.locked });
   }
 
   // 录入其他工作（含凭证 base64 上传）
   if (pathname === '/api/daily' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req) || '{}');
     if (!body.type) return send(res, 400, { error: '缺少工作类型' });
+    /* 注册步骤的分（wt_reg）只能通过「注册录入」按步骤记录：每张工单每一步只记一次分，
+       且受「后面步骤完成后不能再补录前面步骤」的顺序锁约束。
+       通用记分接口不接受 wt_reg —— 否则就绕过了这两条口径
+       （2026-10-15 需求：一个工单的一个步骤只能得一次分，不能重复得分）。
+       前端「其他工作」的类型下拉本来就过滤掉 wt_reg / wt_dec，此处是服务端兜底。 */
+    if (body.type === 'wt_reg') {
+      return send(res, 400, { error: '注册步骤的分数请在「注册录入」里按步骤记录，不能直接提交注册类型的工作量' });
+    }
     /* 申报（wt_dec）按工单去重：同一张工单只记一次申报分 ——
        甲做过了、乙再做一遍，不给重复赋分。 */
     const isDec = body.type === 'wt_dec' && !!body.orderNo;

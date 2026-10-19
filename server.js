@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.31';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.34';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------

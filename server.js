@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.34';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.37';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------
@@ -265,6 +265,52 @@ const BOOTSTRAP_ADMIN_PW = process.env.EPR_BOOTSTRAP_ADMIN_PW || 'admin123';
 const SEED_USERS = [
   ['admin','系统管理员','admin',BOOTSTRAP_ADMIN_PW]
 ];
+
+/* ---------- 周期性步骤（2026-10-21 需求） ----------
+   背景：月报 / 季报 / 年报 这类工作在同一张工单上**每个周期都要再做一次**。
+   老口径是「同一步骤每张工单一辈子只记一次分」，导致上个月报过、这个月再报就不给分、
+   也不写任何记录（合规留痕也一起丢了）。新口径：
+     · 同一工单 + 同一步骤 + **同一周期** 只记一次（防刷分）
+     · 跨周期（下个月 / 下个季度 / 下一年）可以再记
+     · 填错了 → 到「系统日志」删掉那一条记录后可重填（判重基于 daily，不依赖 history）
+   周期归属写在 config.stepPeriods：键 '国家|品类|步骤号' → 'month' | 'quarter' | 'year'。
+   首次启动按步骤名自动识别并落盘；写成 'none' 可显式关闭某一步的周期语义。
+   ⚠️ 这两个常量必须在 loadDB 之前定义（loadDB 会调用 migrateStepPeriods）。 */
+const PERIOD_RULES = [
+  ['month', /月度|月报|月申报/],
+  ['quarter', /季度|季报|季申报/],
+  ['year', /年度|年报|年申报/]
+];
+const PERIOD_KINDS = { month: '月', quarter: '季', year: '年' };
+
+function guessStepPeriod(name){
+  const s = String(name || '');
+  if (!s) return '';
+  for (const rule of PERIOD_RULES) { if (rule[1].test(s)) return rule[0]; }
+  return '';
+}
+
+/* 启动迁移：给 config.stepPeriods 补齐缺失的条目。
+   ⚠️ 已存在的键（含显式写 'none' 关闭的）**一律不覆盖** —— 业务上改过就不该被自动检测顶掉。 */
+function migrateStepPeriods(d){
+  if (!d.config) d.config = {};
+  if (!d.config.stepPeriods) d.config.stepPeriods = {};
+  const cur = d.config.stepPeriods;
+  const steps = d.config.steps || {};
+  let changed = false;
+  for (const key of Object.keys(steps)) {
+    const arr = steps[key];
+    if (!Array.isArray(arr)) continue;
+    for (let i = 0; i < arr.length; i++) {
+      const k = key + '|' + (i + 1);
+      if (Object.prototype.hasOwnProperty.call(cur, k)) continue;
+      const kind = guessStepPeriod(arr[i]);
+      if (kind) { cur[k] = kind; changed = true; }
+    }
+  }
+  return changed;
+}
+
 function loadDB(){
   let d = null;
   if (fs.existsSync(DATA)) {
@@ -290,6 +336,8 @@ function loadDB(){
   if (!d.config.managers) d.config.managers = {};
   if (!d.config.steps) d.config.steps = {};
   if (!d.config.workTypes || !d.config.workTypes.length) d.config.workTypes = DEFAULT_WORKTYPES.map(w=>({...w}));
+  /* 周期性步骤：月报/季报/年报按步骤名自动识别并落盘（已显式配置的不覆盖） */
+  if (migrateStepPeriods(d)) changed = true;
   // 补齐系统工作类型 id（注册=wt_reg / 申报=wt_dec），详见 ensureSysWorkTypes 注释
   if (ensureSysWorkTypes(d)) changed = true;
   if (changed) saveDB(d);
@@ -586,6 +634,32 @@ function workTypePoints(typeId){
 }
 function stepKey(c, s){ return c + '|' + s; }
 function getSteps(c, s){ return DB.config.steps[stepKey(c, s)] || GENERIC_STEPS; }
+/* 某步骤的周期类型：'' = 一次性步骤（老行为），'month' / 'quarter' / 'year' = 周期性步骤 */
+function getStepPeriod(c, s, n){
+  const sp = DB.config && DB.config.stepPeriods;
+  if (!sp) return '';
+  const v = sp[stepKey(c, s) + '|' + n];
+  return (v === 'month' || v === 'quarter' || v === 'year') ? v : '';
+}
+/* 期号：按**自然周期**归属，用「录入时选定的完成日期」算，不是服务器当前时间 ——
+   这样补录上个月 / 上个季度的申报也能落到正确的期。 */
+function periodKeyOf(kind, dateStr){
+  const ds = String(dateStr || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) return '';
+  const y = ds.slice(0, 4), m = parseInt(ds.slice(5, 7), 10);
+  if (!m) return '';
+  if (kind === 'year') return y;
+  if (kind === 'month') return y + '-' + String(m).padStart(2, '0');
+  if (kind === 'quarter') return y + '-Q' + Math.floor((m - 1) / 3 + 1);
+  return '';
+}
+/* 完整业务键：周期性步骤带期号（避免跨期被当成重复），一次性步骤与老版本完全一致 */
+function regBizKey(orderNo, n, periodKind, dateStr){
+  const base = 'reg|' + orderNo + '|' + n;
+  if (!periodKind) return base;
+  const pk = periodKeyOf(periodKind, dateStr);
+  return pk ? (base + '|' + pk) : base;
+}
 
 /* ---------- HTTP 工具 ---------- */
 let _currentReq = null; // 当前请求对象，供 send() 判断是否支持 gzip
@@ -927,35 +1001,72 @@ async function handleApi(req, res, pathname){
   function applyStepToOrder(o, n, note, date, user, bizSet, stat){
     const total = getSteps(o.country, o.serviceItem).length;
     o.history = o.history || [];
-    const bizKey = 'reg|' + o.orderNo + '|' + n;
-    /* 同一项业务只赋一次分：同一工单的同一步已经做过 → 直接跳过，
-       既不重复写步骤历史，也不重复记分（甲做过了、乙再做一遍不给分）。
-       bizSet 是「已有的注册业务键」集合（含历史数据），历史里已有该步也一并拦住。 */
-    if (o.history.some(h => Number(h.step) === Number(n)) || (bizSet && bizSet.has(bizKey))) {
-      if (stat) stat.skipped++;
-      return 'duplicate';
+    /* 周期性步骤（月报 / 季报 / 年报）：判重与顺序锁都走另一套 —— 见下方注释 */
+    const periodKind = getStepPeriod(o.country, o.serviceItem, n);
+    const periodKey = periodKind ? periodKeyOf(periodKind, date) : '';
+    const bizKey = periodKind ? regBizKey(o.orderNo, n, periodKind, date) : ('reg|' + o.orderNo + '|' + n);
+
+    if (periodKind) {
+      /* 【周期性步骤】同一工单 + 同一步骤 + 同一期 → 只记一次；跨期可再记。
+         ⚠️ 这里**不能**再用 `o.history.some(h=>h.step===n)` 判重：
+            那条历史在第一次填报后就永远存在，跨期会被永久拦住。
+            改用 bizSet（由 daily 重建的索引）判断"本期是否已记"——
+            专员在系统日志里删掉那一条记录后，索引里就没有它了，可以重填（用户明确要求）。
+         ⚠️ 也**不套顺序锁**：季度申报是第 9 步，后续第 10 步做完后，下个季度仍必须能报；
+            套顺序锁会被永久锁死。 */
+      if (!periodKey) {
+        if (stat) stat.skipped++;
+        return 'duplicate';
+      }
+      if (bizSet && bizSet.has(bizKey)) {
+        if (stat) stat.skipped++;
+        return 'duplicate';
+      }
+    } else {
+      /* 【一次性步骤】老口径，一行未改：同一工单的同一步做过 → 直接跳过，
+         既不重复写步骤历史，也不重复记分（甲做过了、乙再做一遍不给分）。
+         bizSet 是「已有的注册业务键」集合（含历史数据），历史里已有该步也一并拦住。 */
+      if (o.history.some(h => Number(h.step) === Number(n)) || (bizSet && bizSet.has(bizKey))) {
+        if (stat) stat.skipped++;
+        return 'duplicate';
+      }
+      /* 顺序锁（2026-10-15 需求）：后面的步骤一旦完成，就不允许再补录更前面的步骤 ——
+         堵住「第 2 步做完了、回头再补第 1 步」的倒序录入（也连带堵死倒序补录带来的重复赋分）。
+         UI 上「灰色 = 已完成」按最大已完成步数算，本来就点不了；这里在服务端再兜一层，
+         批量弹窗 / 直接调接口也绕不过去。 */
+      if (o.history.some(h => Number(h.step) > Number(n))) {
+        if (stat) stat.locked = (stat.locked || 0) + 1;
+        return 'locked';
+      }
     }
-    /* 顺序锁（2026-10-15 需求）：后面的步骤一旦完成，就不允许再补录更前面的步骤 ——
-       堵住「第 2 步做完了、回头再补第 1 步」的倒序录入（也连带堵死倒序补录带来的重复赋分）。
-       UI 上「灰色 = 已完成」按最大已完成步数算，本来就点不了；这里在服务端再兜一层，
-       批量弹窗 / 直接调接口也绕不过去。 */
-    if (o.history.some(h => Number(h.step) > Number(n))) {
-      if (stat) stat.locked = (stat.locked || 0) + 1;
-      return 'locked';
+
+    /* 【周期性步骤】不是"完全不推进"，而是**只在第一次完成时**推进（firstTime）：
+       · 不推进的问题：比利时包装法的第 11 步「年度申报」正好是最后一步，
+         若周期步骤一律不动 status，这类工单永远到不了「已下证」。
+       · 每次都推进的问题：后续每报一次季度/年度申报都会把 status 重置回「注册中」，
+         已下证的工单反复退回。
+       所以口径 = 第一次照老逻辑推进，重复报只留痕（history + daily 带 period）。
+       一次性步骤 firstTime 必然为真，行为与老版本完全一致。
+       ⚠️ firstTime 必须在 push **之前**算 —— 先 push 再算的话历史里已经有这一步，恒为 false（实测踩过）。 */
+    const firstTime = !o.history.some(h => Number(h.step) === Number(n));
+    o.history.push({ date: date, step: n, operator: user.displayName, note: note || '', period: periodKey || undefined });
+    if (!periodKind || firstTime) {
+      o.progressNote = (o.progressNote ? o.progressNote + '；' : '') + date.slice(5) + ' 完成第' + n + '步' + (note ? ('：' + note) : '');
+      if (n >= total) { o.status = '已下证'; if (!o.certNo) o.certNo = '待补充'; }
+      else { o.status = n <= 1 ? '待注册' : '注册中'; }
     }
-    o.history.push({ date: date, step: n, operator: user.displayName, note: note || '' });
-    o.progressNote = (o.progressNote ? o.progressNote + '；' : '') + date.slice(5) + ' 完成第' + n + '步' + (note ? ('：' + note) : '');
-    if (n >= total) { o.status = '已下证'; if (!o.certNo) o.certNo = '待补充'; }
-    else { o.status = n <= 1 ? '待注册' : '注册中'; }
     /* 注册记点：**每完成一步就记 1 分**（固定，不再乘难度系数），归属实际操作人。
-       工作类型固定走 wt_reg（页面叫「注册协助」）。 */
+       工作类型固定走 wt_reg（页面叫「注册协助」）。周期性步骤同样是每次记 1 分。 */
     DB.daily.push({
       // 批量写入时同一毫秒会产生重复 id，故加随机后缀
       id: 'd' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
       date: date, type: 'wt_reg', agent: user.displayName,
       country: o.country, serviceItem: o.serviceItem, orderNo: o.orderNo,
       step: n,
-      note: '完成注册第 ' + n + ' 步（每步 ' + REG_STEP_POINTS + ' 分）',
+      period: periodKey || undefined,
+      note: periodKind
+        ? ('完成第 ' + n + ' 步（' + PERIOD_KINDS[periodKind] + '度申报 ' + periodKey + '，每步 ' + REG_STEP_POINTS + ' 分）')
+        : ('完成注册第 ' + n + ' 步（每步 ' + REG_STEP_POINTS + ' 分）'),
       cross: false, points: REG_STEP_POINTS, evidence: [], done: false, bizKey: bizKey
     });
     if (bizSet) bizSet.add(bizKey);
@@ -963,13 +1074,20 @@ async function handleApi(req, res, pathname){
     /* 返回值是处理结果状态（两个调用点都只用来区分锁定 / 重复，不依赖布尔） */
     return 'ok';
   }
-  /* 已有注册业务键集合：优先用记录上的 bizKey；兼容早期没有 bizKey 的记录（按 type+工单号+步骤兜底） */
+  /* 已有注册业务键集合：优先用记录上的 bizKey；兼容早期没有 bizKey 的记录（按 type+工单号+步骤兜底）。
+     ⚠️ 2026-10-21：周期性步骤的老记录没有期号（bizKey 形如 reg|单号|9），
+        这里按记录**自身的日期**补一个带期号的键 —— 老数据不需要迁移，也能正确判"哪一期已报过"。 */
   function collectRegBizKeys(){
     const s = new Set();
     for (const d of DB.daily) {
       if (d.type !== 'wt_reg') continue;
       if (d.bizKey) s.add(d.bizKey);
       else if (d.orderNo != null) s.add('reg|' + d.orderNo + '|' + (d.step == null ? '' : d.step));
+      if (d.orderNo == null || d.step == null) continue;
+      const kind = getStepPeriod(d.country, d.serviceItem, d.step);
+      if (!kind) continue;
+      const pk = d.period || periodKeyOf(kind, d.date || '');
+      if (pk) s.add('reg|' + d.orderNo + '|' + d.step + '|' + pk);
     }
     return s;
   }
@@ -1203,6 +1321,10 @@ async function handleApi(req, res, pathname){
         audit(user, 'config', '覆盖全局配置字段: ' + Object.keys(body.config).join(','));
         DB.config = Object.assign(DB.config, body.config);
       }
+      /* 步骤配置可能被改动（新增/改名/删除步骤）→ 立刻重跑一次周期识别，
+         免得"加了个月报步骤，必须重启服务才生效"。已显式配置的键不覆盖。
+         ⚠️ 传的是 DB（不是 DB.config）—— 该函数签名收的是「带 .config 的库对象」。 */
+      migrateStepPeriods(DB);
       saveDBNow(DB);   // 配置是用户手动保存的设置，必须落盘完成再回执
     }
     return send(res, 200, { ok: true, config: DB.config });

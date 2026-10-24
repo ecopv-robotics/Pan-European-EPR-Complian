@@ -1465,6 +1465,64 @@ async function handleApi(req, res, pathname){
     return send(res, 200, { ok: true, removed, dailyRemoved, remaining: DB.workOrders.length, scope: scopeText, snapshot: snap });
   }
 
+  /* ---------- 误录撤销（2026-10-24 新增，仅管理员） ----------
+     背景：注册录入只支持「勾选工单批量记步骤」，没有撤销入口；前端删工作量记录只能一条一条删，
+     而每删一条都要把 30MB 整库同步落盘一次 —— 某人一天误录 8,000+ 条时，界面根本处理不了。
+     这里给管理员留一个**范围极窄**的口子：只能按「日期 + 执行人 + 步骤区间」撤回注册录入，
+     同时把工单 history 里对应的步骤条目一并摘掉（否则界面仍显示已完成、且顺序锁让她无法重录）。
+     ⚠️ 三道闸：① 仅管理员；② dryRun 默认 true，真删必须 confirm 精确等于 'UNDO:<日期>'；
+        ③ 单次命中上限 20000 条，且只动 type==='wt_reg'、绝不碰其他工作类型与工单其它字段。 */
+  if (pathname === '/api/maintenance/undo-reg' && req.method === 'POST') {
+    if (!isAdminLike(user)) return send(res, 403, { error: '仅管理员可操作' });
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const date = String(body.date || '');
+    const agent = String(body.agent || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(res, 400, { error: 'date 必须是 YYYY-MM-DD' });
+    if (!agent) return send(res, 400, { error: '缺少 agent（执行人显示名）' });
+    let steps = Array.isArray(body.steps) ? body.steps.map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 99) : null;
+    if (!steps || !steps.length) {
+      const maxStep = Number(body.maxStep);
+      if (!Number.isInteger(maxStep) || maxStep < 1 || maxStep > 99) return send(res, 400, { error: '需要 steps 数组或 maxStep(1-99)' });
+      steps = []; for (let i = 1; i <= maxStep; i++) steps.push(i);
+    }
+    const stepSet = new Set(steps);
+    const dryRun = body.dryRun !== false;      // 默认只演练
+    const confirm = String(body.confirm || '');
+    if (!dryRun && confirm !== 'UNDO:' + date) return send(res, 400, { error: "真删需确认串 confirm = 'UNDO:" + date + "'" });
+
+    const hit = DB.daily.filter(d => d && d.type === 'wt_reg' && d.date === date && d.agent === agent && stepSet.has(Number(d.step)));
+    if (!hit.length) return send(res, 200, { ok: true, dryRun, matchedDaily: 0, matchedHistory: 0, note: '没有匹配记录' });
+    if (hit.length > 20000) return send(res, 400, { error: '命中 ' + hit.length + ' 条，超过单次上限 20000，请缩小范围' });
+
+    // 工单历史：同日期 + 同执行人 + 同步骤区间
+    const hitIds = new Set(hit.map(d => d.id));
+    let histRemoved = 0; const ordersTouched = new Set();
+    for (const o of DB.workOrders || []) {
+      const hs = o.history;
+      if (!Array.isArray(hs) || !hs.length) continue;
+      const keep = hs.filter(h => !(String(h.date) === date && stepSet.has(Number(h.step)) && h.operator === agent));
+      if (keep.length !== hs.length) {
+        histRemoved += hs.length - keep.length;
+        ordersTouched.add(o.orderNo);
+        if (!dryRun) o.history = keep;
+      }
+    }
+
+    const summary = { ok: true, dryRun, date, agent, steps, matchedDaily: hit.length,
+                      matchedHistory: histRemoved, ordersTouched: ordersTouched.size,
+                      dailyBefore: DB.daily.length, dailyAfter: DB.daily.length - hit.length };
+    if (dryRun) return send(res, 200, Object.assign(summary, { note: '演练模式，未改动任何数据' }));
+
+    const before = DB.daily.length;
+    DB.daily = DB.daily.filter(d => !hitIds.has(d.id));
+    const removed = before - DB.daily.length;
+    saveDBNow(DB);
+    audit(user, 'undo-reg', '批量撤回注册录入：' + date + ' / ' + agent + ' / 步骤 ' + steps.join(',')
+      + '｜工作量记录 ' + removed + ' 条，工单历史 ' + histRemoved + ' 条，涉及工单 ' + ordersTouched.size + ' 张');
+    return send(res, 200, Object.assign(summary, { removed, dailyNow: DB.daily.length }));
+  }
+
   /* ---------- 数据备份与恢复（仅管理员） ---------- */
   // 下载当前完整数据（data.json），用于本地留底 / 迁移
   if (pathname === '/api/backup' && req.method === 'GET') {

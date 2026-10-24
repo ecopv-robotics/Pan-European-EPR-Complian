@@ -727,13 +727,16 @@ function getSteps(c,s){
   return v;
 }
 function clearStepsCache(){ _stepsCache.clear(); }
-// 判断一条工单的服务项目是否命中选中的项目类型（WEEE/电池/包装）
+// 判断一条工单的服务项目是否命中选中的项目类型（WEEE/电池/包装/一次性塑料）
 function svcTypeMatch(svcItem, cat){
   const si = svcItem || '';
   if(!cat) return true;
   if(cat==='WEEE') return /WEEE/.test(si);
   if(cat==='电池') return si.indexOf('电池')>=0;
   if(cat==='包装') return si.indexOf('包装')>=0;
+  /* 一次性塑料（2026-10-23 需求）：目前只有德国有这个项目（工单 serviceItem = 「德国一次性塑料」）。
+     ⚠️ 判断顺序无所谓：该词自身不含「包装/电池/WEEE」，与上面三类不重叠。 */
+  if(cat==='一次性塑料') return si.indexOf('一次性塑料')>=0;
   return false;
 }
 function statusClass(s){ return {'待提交':'p-gray','待注册':'p-blue','注册中':'p-amber','待下证':'p-purple','已下证':'p-green'}[s]||'p-gray'; }
@@ -920,10 +923,28 @@ function renderProgressPill(id, opts, selectedVals){
   const set=new Set(selectedVals.map(x=>String(x)));
   wrap.innerHTML = opts.map(v=>`<button class="btn small step-opt ${set.has(String(v))?'on':''}" type="button" data-val="${v}">${v===-1?'全部完成':v+'步'}</button>`).join('');
 }
+/* 【2026-10-23】「服务项目」下拉随国家联动重建。
+   ids.svcCats(country) 返回该国家允许出现的类别数组；当前选中值若不在新列表里，
+   回落成「全部项目」。用途：一次性塑料只有德国有，选芬兰 / 比利时不该出现这一项。 */
+function rebuildSvcOptions(ids){
+  const cs=$('#'+ids.countryId), ss=$('#'+ids.serviceId);
+  if(!cs || !ss || typeof ids.svcCats!=='function') return false;
+  const cur=ss.value;
+  const list=ids.svcCats(cs.value)||[];
+  ss.innerHTML='<option value="">全部项目</option>'+list.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  ss.value = (cur && list.indexOf(cur)>=0) ? cur : '';
+  return ss.value!==cur;
+}
 function attachFilterListeners(ids, callback){
   /* 性能：'input' 每次按键都触发，全量筛选 29819 条工单会卡顿 → 加 250ms 防抖 */
   let debTimer=null;
   const debounced=()=>{ clearTimeout(debTimer); debTimer=setTimeout(callback,250); };
+  /* ⚠️ 这个重建监听**必须挂在下面通用 change 回调之前**：先改好选项和值，
+     紧接着的 callback 才会拿着修正后的值去筛。挂在后面会先按旧值筛一次，
+     页面就停在「下拉是全部项目、列表 0 条」的错位状态。 */
+  if(ids.serviceId && ids.countryId && typeof ids.svcCats==='function'){
+    $('#'+ids.countryId).addEventListener('change', ()=>{ rebuildSvcOptions(ids); });
+  }
   ['change'].forEach(ev=>{
     $('#'+ids.countryId).addEventListener(ev,callback);
     $('#'+ids.serviceId).addEventListener(ev,callback);
@@ -956,6 +977,9 @@ function attachFilterListeners(ids, callback){
   $('#'+ids.confirmId).onclick=()=>callback();
   $('#'+ids.resetId).onclick=()=>{
     $('#'+ids.countryId).value=''; $('#'+ids.serviceId).value=''; $('#'+ids.companyId).value='';
+    /* 重置回「全部国家」后要重建服务项目选项 —— 否则刚从德国切过来时列表里还留着一次性塑料，
+       等于「全部国家」也能选到它（2026-10-23）。 */
+    rebuildSvcOptions(ids);
     if(ids.statusId && $('#'+ids.statusId)) $('#'+ids.statusId).value='';
     if(ids.agentId)$('#'+ids.agentId).value='';
     if(ids.customerNoId)$('#'+ids.customerNoId).value='';
@@ -1246,7 +1270,7 @@ function renderDashTodo(){
   const allDecl = DB.daily.filter(d=>d.type==='wt_dec'&&!d.done && (isManager()||rcSet.has(d.country)));
   const allOther = DB.daily.filter(d=>['wt_areg','wt_adec','wt_abill','wt_pro','wt_sop','wt_audit','wt_file','wt_cross'].includes(d.type)&&!d.done && (isManager()||rcSet.has(d.country)));
 
-  // 项目下拉固定三大类：WEEE/电池/包装；先选国家再选项目
+  // 项目下拉：WEEE/电池/包装/一次性塑料（一次性塑料目前仅德国有，其他国家选它会筛空，不影响数据）
   // 给定国家，计算该国家出现过的项目类型
   function svcTypesFor(country){
     const set = new Set();
@@ -1256,10 +1280,14 @@ function renderDashTodo(){
       if(/WEEE/.test(si)) set.add('WEEE');
       if(si.indexOf('电池')>=0) set.add('电池');
       if(si.indexOf('包装')>=0) set.add('包装');
+      // 一次性塑料（2026-10-23）：按订单实际存在的项目动态出现 → 天然只有德国会显示
+      if(si.indexOf('一次性塑料')>=0) set.add('一次性塑料');
     });
     return [...set];
   }
-  const svcTypesAll = svcTypesFor('');
+  /* 「全部国家」时不列一次性塑料：它只属于德国，必须先把国家选到德国才会出现
+     （与录入页筛选栏同一口径，2026-10-23）。 */
+  const svcTypesAll = svcTypesFor('').filter(x=>x!=='一次性塑料');
 
   // 当前展示的待办板块：reg=注册待办 / decl=申报待办 / other=其他待办
   let activeBoard = 'reg';
@@ -1354,8 +1382,12 @@ function renderDashTodo(){
   // 首次渲染（无筛选）
   body.innerHTML = build('', '');
   function applyFilter(){
-    const c = $('#dashCountryFilter').value;
-    const s = $('#dashSvcFilter').value;
+    let c = $('#dashCountryFilter').value;
+    let s = $('#dashSvcFilter').value;
+    /* 服务项目按国家联动（2026-10-23）：一次性塑料只有德国有。先选了它再切到别的国家时，
+       要回落成「全部项目」再渲染 —— 否则下拉显示「全部项目」、列表却是按一次性塑料筛出的 0 条。 */
+    const avail = c ? svcTypesFor(c) : svcTypesAll;
+    if(s && avail.indexOf(s)<0) s = '';
     body.innerHTML = build(c, s);
     // innerHTML 重建会丢失元素上的 onclick，需重新绑定
     $('#dashCountryFilter').addEventListener('change', applyFilter);
@@ -2344,11 +2376,19 @@ function renderEntry(){
   const orders = showClosed ? allOrdersRaw : openOrders;
   const closedCnt=allOrdersRaw.length-openOrders.length;
   const countries=unique(orders.map(o=>o.country));
-  const services=['WEEE','电池','包装'];
+  /* 服务项目下拉（这是**类别**筛选，不是完整 serviceItem；工单里是「德国一次性塑料」这类
+     带国家前缀的全名，靠 svcTypeMatch 模糊命中）。
+     【2026-10-23 二次调整】「一次性塑料」只在**确实有这个项目的国家**出现 —— 目前只有德国。
+     原来写死四类，选芬兰 / 比利时也能选到，筛出来是空列表（用户截图反馈）。
+     现在按本页数据算出哪些国家有一次性塑料，下拉随国家联动重建（rebuildSvcOptions）；
+     「全部国家」时不列它，必须先选到德国。 */
+  const plasticCtry = new Set(orders.filter(o=>(o.serviceItem||'').indexOf('一次性塑料')>=0).map(o=>o.country));
+  const svcCats = (c)=> (c && plasticCtry.has(c)) ? ['WEEE','电池','包装','一次性塑料'] : ['WEEE','电池','包装'];
+  const services = svcCats('');
   const companies=unique(orders.map(o=>o.companyCn));
   const agents=unique(orders.map(o=>o.agent));
   const customerNos=unique(orders.map(o=>o.customerNo));
-  const filterIds = {countryId:'fRegCountry',serviceId:'fRegService',statusId:'fRegStatus',agentId:'fRegAgent',customerNoId:'fRegCustomerNo',orderNoId:'fRegOrderNo',companyId:'fRegCompany',dateFromId:'fRegDateFrom',dateToId:'fRegDateTo',progressId:'fRegProgress',resetId:'fRegReset',confirmId:'fRegConfirm'};
+  const filterIds = {countryId:'fRegCountry',serviceId:'fRegService',statusId:'fRegStatus',agentId:'fRegAgent',customerNoId:'fRegCustomerNo',orderNoId:'fRegOrderNo',companyId:'fRegCompany',dateFromId:'fRegDateFrom',dateToId:'fRegDateTo',progressId:'fRegProgress',resetId:'fRegReset',confirmId:'fRegConfirm',svcCats};
   // 计算已完成步数可选项：根据国家+项目联动，按实际配置的步骤数展示全部可选项
   function calcProgressOpts(){
     const c=$('#fRegCountry')?$('#fRegCountry').value:'';
@@ -2555,7 +2595,13 @@ function renderEntry(){
       if(oldMore) oldMore.closest('div').remove();
       const next = rendered + chunkSize;
       const slice = currentList.slice(rendered, next);
-      if(!slice.length){ if(rendered===0) $('#ordList').innerHTML='<div class="empty">无匹配工单，请先在「工单导入」中导入</div>'; return; }
+      if(!slice.length){
+        if(rendered===0) $('#ordList').innerHTML='<div class="empty">无匹配工单，请先在「工单导入」中导入</div>';
+        /* 筛出 0 条时不能直接 return —— 否则顶部计数会停在上一轮的值（如切国家后还显示 382 条）。
+           申报录入的 decPaint() 有同样的补偿，这里补齐。 */
+        $('#regCount').textContent = currentList.length + ' 工单（已显示 ' + Math.min(rendered, currentList.length) + '）';
+        return;
+      }
       const isEnd = next >= currentList.length;
       const more = isEnd ? '' : `<div style="text-align:center;padding:12px"><button class="btn" id="loadMoreBtn">加载更多（剩余 ${currentList.length - next} 条）</button></div>`;
       const wrap = document.createElement('div');
@@ -2604,7 +2650,7 @@ function renderEntry(){
     /* 与「注册录入」保持一致的入口：同一套筛选栏（国家/项目/代理/客户编号/客户中文名称/工单号 + 确定/重置）、
        同一套卡片列表、同一套批量操作条，同样按 150 条分批渲染。
        数据池固定为「已下证 且 尚未申报」的工单（口径与原来一致）。 */
-    const decFilterIds = {countryId:'fDecCountry',serviceId:'fDecService',statusId:'fDecStatus',agentId:'fDecAgent',customerNoId:'fDecCustomerNo',orderNoId:'fDecOrderNo',companyId:'fDecCompany',dateFromId:'fDecDateFrom',dateToId:'fDecDateTo',resetId:'fDecReset',confirmId:'fDecConfirm'};
+    const decFilterIds = {countryId:'fDecCountry',serviceId:'fDecService',statusId:'fDecStatus',agentId:'fDecAgent',customerNoId:'fDecCustomerNo',orderNoId:'fDecOrderNo',companyId:'fDecCompany',dateFromId:'fDecDateFrom',dateToId:'fDecDateTo',resetId:'fDecReset',confirmId:'fDecConfirm',svcCats};
     el.innerHTML = tabsHtml + `
     <div class="sec-head"><span class="num">②</span><h2>申报录入</h2><span class="mini">已下证 / 注册中 / 待下证 的工单 → 勾选后批量标记为"申报完成"</span></div>
     <div class="card">

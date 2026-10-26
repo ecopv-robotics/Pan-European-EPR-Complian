@@ -208,6 +208,37 @@
   @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
   .card h3{margin:0 0 14px;font-size:15px;display:flex;align-items:center;gap:8px;font-weight:700}
+  /* ---- 待办任务：一行 5 格的卡片墙（2026-10-26 需求） ---- */
+  .task-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+  /* 桌面端固定一行 5 个（用户要求）；窗口变窄才逐步减少，避免卡片被压成一条 */
+  @media (max-width:1240px){ .task-grid{grid-template-columns:repeat(4,minmax(0,1fr))} }
+  @media (max-width:1000px){ .task-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+  @media (max-width:760px){ .task-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media (max-width:520px){ .task-grid{grid-template-columns:1fr} }
+  .task-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 13px 11px;
+    cursor:pointer;transition:transform .12s ease,box-shadow .12s ease,border-color .12s ease;
+    display:flex;flex-direction:column;gap:7px;min-height:150px;box-shadow:0 1px 2px rgba(15,40,25,.04)}
+  .task-card:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(15,40,25,.12);border-color:var(--brand)}
+  .task-card:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+  .task-card.overdue{border-color:var(--red);background:linear-gradient(180deg,rgba(220,38,38,.05),transparent 60%)}
+  .task-card.done{opacity:.82}
+  .task-card .tc-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .task-card .tc-head .pill{font-size:10.5px;padding:2px 7px}
+  .task-card .tc-due{font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap}
+  .task-card .tc-due.amber{color:var(--amber)}
+  .task-card .tc-due.red{color:var(--red)}
+  .task-card .tc-title{font-size:14px;font-weight:800;color:var(--ink);line-height:1.35;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .task-card .tc-desc{font-size:12px;color:var(--muted);line-height:1.5;margin-top:-2px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:34px}
+  .task-card .tc-empty{color:var(--line);font-style:italic}
+  .task-card .tc-bar{height:6px;border-radius:999px;background:var(--bg);overflow:hidden;margin-top:auto}
+  .task-card .tc-bar>i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#3b82f6,#2563eb);transition:width .3s ease}
+  .task-card.done .tc-bar>i{background:linear-gradient(90deg,#22c55e,#16a34a)}
+  .task-card .tc-meta{font-size:11.5px;color:var(--muted);font-weight:600}
+  .task-card .tc-meta b{color:var(--ink)}
+  .task-card .tc-foot{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+  .task-card .tc-foot .pill{font-size:10px;padding:1px 6px}
   .grid{display:grid;gap:18px}
   .kpis{grid-template-columns:repeat(4,1fr);margin-bottom:18px}
   .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
@@ -455,6 +486,7 @@
     </div>
     <nav class="nav" id="nav">
       <button data-page="dash" class="active"><span class="ico">▦</span>驾驶舱看板</button>
+      <button data-page="task"><span class="ico">☑</span>待办任务</button>
       <button data-page="import"><span class="ico">⭳</span>工单导入</button>
       <button data-page="entry"><span class="ico">✎</span>注册/申报录入</button>
       <button data-page="other"><span class="ico">⚡</span>其他工作</button>
@@ -494,6 +526,7 @@
 
     <div class="content">
       <section class="page active" id="page-dash"></section>
+      <section class="page" id="page-task"></section>
       <section class="page" id="page-import"></section>
       <section class="page" id="page-entry"></section>
       <section class="page" id="page-other"></section>
@@ -1041,6 +1074,7 @@ async function loadState(){
    ============================================================ */
 const PAGE_META = {
   dash:['驾驶舱看板','实时注册进度 · 待办总览 · 数据报表'],
+  task:['待办任务','发布任务 · 指派人员 · 截止跟踪 · 完成进度与点数'],
   import:['工单导入','导入注册工单，作为进度录入的数据源（多人共享）'],
   entry:['注册/申报录入','分步录入注册进度 / 自动从已下证工单导入申报'],
   other:['其他工作','录入申报、客户维护、资料整理等其他工作，支持上传凭证'],
@@ -1053,6 +1087,7 @@ const PAGE_META = {
 /* 面包屑：按页面层级显示路径 */
 const CRUMB_MAP = {
   dash:['首页','驾驶舱看板'],
+  task:['首页','待办任务'],
   import:['首页','工单导入'],
   entry:['首页','注册/申报录入'],
   other:['首页','其他工作'],
@@ -1071,7 +1106,7 @@ function go(page){
   const crumb=$('#crumb');
   if(crumb) crumb.textContent=(CRUMB_MAP[page]||['首页']).join('  /  ');
   updateNotifBadge();
-  ({dash:renderDash,import:renderImport,entry:renderEntry,other:renderOther,config:renderConfig,points:renderPoints,report:renderReport,log:renderLog,'step-detail':renderStepDetail}[page])();
+  ({dash:renderDash,task:renderTask,import:renderImport,entry:renderEntry,other:renderOther,config:renderConfig,points:renderPoints,report:renderReport,log:renderLog,'step-detail':renderStepDetail}[page])();
 }
 document.getElementById('nav').addEventListener('click',e=>{ const b=e.target.closest('button'); if(b) go(b.dataset.page); });
 document.getElementById('roleSeg').addEventListener('click',e=>{
@@ -1942,6 +1977,463 @@ function renderPoints(){
 
 
 
+
+/* ============================================================
+   待办任务（2026-10-26 原型）
+   两类：指派任务（管理员发布 → 选人 + 截止日期 + 每人点数）／个人待办（自己备忘）
+   进度口径：完成人数 / 应完成人数；点数进度 = 完成人数×每人点数 / 总人数×每人点数
+   ⚠️ 原型阶段分数只在本模块累计，不写入 daily（是否并入工作量点数待确认）
+   ============================================================ */
+let taskFilter = 'all';        // all | mine | assign | personal
+let taskOnlyTodo = false;      // 只看未完成
+
+function taskTodayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function taskDaysLeft(due){
+  if(!due) return null;
+  const a=new Date(due+'T00:00:00'), b=new Date(taskTodayStr()+'T00:00:00');
+  return Math.round((a-b)/86400000);
+}
+/* 服务端存的是 ISO(UTC)，页面上按浏览器本地时区显示，避免出现「01:33 完成」这种对不上号的时刻 */
+function taskFmtTime(iso){
+  if(!iso) return '';
+  const d=new Date(iso); if(isNaN(d)) return String(iso).slice(0,16);
+  const p=n=>String(n).padStart(2,'0');
+  return p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function taskStat(t){
+  const total = t.kind==='personal' ? 1 : (t.assignees||[]).length;
+  const done = (t.done||[]).length;
+  const pts = Number(t.points)||0;
+  return { total, done, pts, totalPts: total*pts, donePts: done*pts, pct: total?Math.round(done/total*100):0, allDone: total>0 && done>=total };
+}
+function taskIsOverdue(t, st){ const d=taskDaysLeft(t.due); return d!==null && d<0 && !st.allDone; }
+
+function renderTask(){
+  const el=$('#page-task');
+  const isAdmin = isAdminRole();
+  const me = DB.me.displayName;
+  const tasks = (DB.tasks||[]).slice().sort((a,b)=>{
+    const sa=taskStat(a), sb=taskStat(b);
+    /* 排序：逾期未完成 → 未完成（按截止日期近的在前）→ 已完成 */
+    const oa=taskIsOverdue(a,sa)?0:(sa.allDone?2:1), ob=taskIsOverdue(b,sb)?0:(sb.allDone?2:1);
+    if(oa!==ob) return oa-ob;
+    const da=a.due||'9999-12-31', db2=b.due||'9999-12-31';
+    if(da!==db2) return da.localeCompare(db2);
+    return String(b.createdAt||'').localeCompare(String(a.createdAt||''));
+  });
+
+  /* ---- 顶部统计 ---- */
+  /* 「我的待办」口径（2026-10-26 用户反馈修正）：我自建的备忘 + **指派给我的任务**
+     （含自己指派给自己）。原来这里只认 kind==='personal'，导致「我给自己发布的指派任务」不出现在个人待办里。 */
+  const isMine = t => t.kind==='personal' ? t.owner===me : (t.assignees||[]).indexOf(me)>=0;
+  const mineCount = tasks.filter(isMine).length;
+  let doing=0, mineTodo=0, overdue=0, givenPts=0;
+  tasks.forEach(t=>{
+    const st=taskStat(t);
+    if(!st.allDone) doing++;
+    if(isMine(t) && !st.allDone && !t.closed && !(t.done||[]).some(d=>d.name===me)) mineTodo++;
+    if(taskIsOverdue(t,st)) overdue++;
+    givenPts += st.donePts;
+  });
+
+  /* ---- 筛选 ----
+     ⚠️ 专员（工作人员）在接口层已经只拿到「指派给我的 + 自己的备忘」，
+        界面再兜一层：非管理员的默认/兜底视图固定为「我的待办」，不出现全部/他人任务。 */
+  const effFilter = isAdmin ? taskFilter : ((taskFilter==='all'||taskFilter==='assign') ? 'mine' : taskFilter);
+  const list = tasks.filter(t=>{
+    if(effFilter==='assign' && t.kind!=='assign') return false;
+    if(effFilter==='mine' && !isMine(t)) return false;
+    if(effFilter==='personal' && t.kind!=='personal') return false;
+    const st=taskStat(t);
+    if(taskOnlyTodo && st.allDone) return false;
+    return true;
+  });
+
+  const statCard=(label,val,color,sub)=>`<div class="card" style="padding:16px 18px;flex:1;min-width:150px">
+      <div class="mini" style="font-weight:700;color:var(--muted);letter-spacing:.4px">${label}</div>
+      <div style="font-size:26px;font-weight:800;color:${color};margin-top:6px;line-height:1.1">${val}</div>
+      ${sub?`<div class="mini" style="margin-top:4px">${sub}</div>`:''}
+    </div>`;
+
+  el.innerHTML = `
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+    ${statCard('进行中任务',doing,'var(--ink)','未全部完成')}
+    ${statCard('我待完成',mineTodo,'var(--brand)','指派给我且未完成')}
+    ${statCard('已逾期',overdue,'var(--red)','超过截止日期')}
+    ${statCard('累计已发点数',givenPts,'var(--green)','按完成人数×每人点数')}
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <div class="seg" id="taskTabSeg">
+        ${isAdmin?`<button data-tf="all" class="${effFilter==='all'?'on':''}">全部任务（${tasks.length}）</button>`:''}
+        <button data-tf="mine" class="${effFilter==='mine'?'on':''}">我的待办（${mineCount}）</button>
+        ${isAdmin?`<button data-tf="assign" class="${effFilter==='assign'?'on':''}">指派任务（${tasks.filter(t=>t.kind==='assign').length}）</button>`:''}
+        <button data-tf="personal" class="${effFilter==='personal'?'on':''}">个人备忘（${tasks.filter(t=>t.kind==='personal').length}）</button>
+      </div>
+      ${isAdmin?'':'<span class="mini" style="color:var(--muted)">仅显示指派给你和你自己记的待办</span>'}
+      <label class="mini" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600"><input type="checkbox" id="taskOnlyTodo" ${taskOnlyTodo?'checked':''} style="width:auto;padding:0;margin:0"> 只看未完成</label>
+      <div style="flex:1"></div>
+      <button class="btn primary" id="taskNewBtn">${isAdmin?'+ 新建任务':'+ 新建备忘'}</button>
+    </div>
+
+    <div id="taskList" class="task-grid">${
+      list.length ? list.map(taskCardHtml).join('') : `<div class="empty" style="grid-column:1/-1">还没有任务${isAdmin?'，点右上角「+ 新建任务」发布第一条':''}</div>`
+    }</div>
+  </div>`;
+
+  /* ---- 交互 ----
+     卡片点击 → 打开明细弹窗；卡片里的按钮必须 stopPropagation，否则会顺带把明细也打开。 */
+  el.querySelectorAll('#taskTabSeg button').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; renderTask(); });
+  const cb=$('#taskOnlyTodo'); if(cb) cb.onchange=()=>{ taskOnlyTodo=cb.checked; renderTask(); };
+  const nb=$('#taskNewBtn'); if(nb) nb.onclick=()=>openTaskForm(null, !isAdmin);
+  el.querySelectorAll('.task-card').forEach(c=>{
+    c.onclick=()=>openTaskDetail(c.dataset.taskId);
+    c.onkeydown=e=>{ if(e.key==='Enter'){ openTaskDetail(c.dataset.taskId); } };
+  });
+  const stop=e=>e.stopPropagation();
+  el.querySelectorAll('[data-task-done]').forEach(b=>{ b.onclick=e=>{ stop(e); markTaskDone(b.dataset.taskDone); }; });
+}
+
+function taskCardHtml(t){
+  const st = taskStat(t), me = DB.me.displayName;
+  const left = taskDaysLeft(t.due);
+  const overdue = taskIsOverdue(t, st);
+  const mine = t.kind==='assign' ? (t.assignees||[]).indexOf(me)>=0 : t.owner===me;
+  const iDone = (t.done||[]).some(d=>d.name===me);
+  let dueTxt='未设截止', dueCls='';
+  if(t.due){
+    if(st.allDone){ dueTxt='截止 '+t.due; }
+    else if(left<0){ dueTxt='逾期 '+Math.abs(left)+' 天'; dueCls='red'; }
+    else if(left===0){ dueTxt='今天截止'; dueCls='amber'; }
+    else { dueTxt='剩 '+left+' 天'; dueCls=left<=2?'amber':''; }
+  }
+  const nFiles = (t.files||[]).length;
+  return `<div class="task-card${overdue?' overdue':''}${st.allDone?' done':''}" data-task-id="${esc(t.id)}" tabindex="0" role="button" title="点击查看明细">
+    <div class="tc-head">
+      <span class="pill ${t.kind==='assign'?'p-blue':'p-purple'}">${t.kind==='assign'?'指派':'备忘'}</span>
+      <span class="tc-due ${dueCls}">${esc(dueTxt)}</span>
+    </div>
+    <div class="tc-title">${esc(t.title)}</div>
+    <div class="tc-desc">${t.desc?esc(t.desc):'<span class="tc-empty">无说明</span>'}</div>
+    <div class="tc-bar"><i style="width:${st.pct}%"></i></div>
+    <div class="tc-meta"><b>${st.done}/${st.total}</b> 人${t.kind==='assign'?` · <b>${st.donePts}/${st.totalPts}</b> 点`:''} · ${st.pct}%</div>
+    <div class="tc-foot">
+      <span class="mini">${t.kind==='assign'?('👥 '+(t.assignees||[]).length):'📌 私有'}</span>
+      ${nFiles?`<span class="mini">📎 ${nFiles}</span>`:''}
+      <span style="flex:1"></span>
+      ${st.allDone?'<span class="pill p-green">已完成</span>':(t.closed?'<span class="pill p-gray">已结束</span>':(mine&&!iDone?'<span class="pill p-amber">待我完成</span>':''))}
+    </div>
+  </div>`;
+}
+
+/* ---------- 新建 / 编辑任务：同一个弹窗（含附件） ----------
+   编辑口径（2026-10-26 权限规定）：
+     管理员 → 什么都能改（标题/说明/截止/点数/人员）
+     发布人（非管理员）→ 只能改标题/说明/截止，点数与人员置灰只读
+     其他人 → 根本看不到「编辑」按钮，接口层也会 403 */
+function taskCanEdit(t){ return isAdminRole() || (!!t.createdBy && t.createdBy === DB.me.displayName); }
+
+function openTaskForm(task, personalOnly){
+  const isEdit = !!task;
+  const isAdmin = isAdminRole();
+  /* 专员没有「给他人派任务」的权限，只能记自己的个人备忘 → 直接锁成个人备忘，不给类型切换 */
+  const lockPersonal = !isAdmin;
+  const users = (DB.users||[]).filter(u=>u.displayName);
+  const t = task || {};
+  const curAssignees = (t.assignees||[]);
+  const canEditPoints = isAdmin;              // 点数/人员只有管理员能改
+  $('#modal').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h3 style="margin:0">${isEdit?'编辑任务':'新建任务'}</h3>
+      <button class="btn ghost" id="tkX" style="padding:6px 10px">✕</button>
+    </div>
+    ${(isEdit||lockPersonal)?'':`<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <div class="seg" id="taskKindSeg">
+        <button data-tk="assign" class="on">指派任务</button>
+        <button data-tk="personal">个人备忘（不带点数）</button>
+      </div>
+    </div>`}
+    ${(!isEdit && lockPersonal)?'<div class="mini" style="margin-bottom:10px;color:var(--muted)">类型：个人备忘（仅自己可见，不计点数）</div>':''}
+    ${isEdit?`<div class="mini" style="margin-bottom:10px;color:var(--muted)">类型：${t.kind==='assign'?'指派任务':'个人备忘'}（类型不可改）</div>`:''}
+    <div class="field"><label>任务标题 *</label><input id="tkTitle" placeholder="例：10 月意大利包装法申报核对" maxlength="120" value="${esc(t.title||'')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div class="field"><label>截止日期</label><input type="date" id="tkDue" value="${esc(t.due||'')}"></div>
+      <div class="field" id="tkPtsWrap"><label>每人完成可得点数${canEditPoints?'':' <span style="color:var(--muted)">（仅管理员可改）</span>'}</label><input type="number" id="tkPoints" value="${t.points!==undefined?t.points:10}" min="0" step="1" ${canEditPoints?'':'disabled'}></div>
+    </div>
+    <div class="field" id="tkWhoWrap" style="margin-top:10px"><label>指派给（可多选）${canEditPoints?'':' <span style="color:var(--muted)">（仅管理员可改）</span>'}</label>
+      <div id="tkWho" style="display:flex;flex-wrap:wrap;gap:6px;max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;${canEditPoints?'':'opacity:.6'}">
+        ${users.map(u=>`<label class="check-cell" style="font-size:12.5px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer"><input type="checkbox" class="tk-who" value="${esc(u.displayName)}" ${curAssignees.indexOf(u.displayName)>=0?'checked':''} ${canEditPoints?'':'disabled'} style="width:auto;padding:0;margin:0 4px 0 0">${esc(u.displayName)}</label>`).join('')}
+      </div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>说明</label><textarea id="tkDesc" rows="3" placeholder="要做成什么样、交付物在哪里…" style="resize:vertical">${esc(t.desc||'')}</textarea></div>
+    <div class="hint" style="margin-top:10px;font-size:12px">任务发布时不带附件；领取人在「确认完成」时填写工作说明并上传交付附件。</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" id="tkCancel">取消</button>
+      <button class="btn primary" id="tkSave">${isEdit?'保存修改':'发布'}</button>
+    </div>`;
+  $('#modalBg').classList.add('show');
+
+  let kind = t.kind || (lockPersonal ? 'personal' : 'assign');
+  const ptsWrap=$('#tkPtsWrap'), whoWrap=$('#tkWhoWrap');
+
+  /* 个人备忘没有「指派对象」和「点数」这两个概念 —— 编辑态没有类型切换按钮，
+     所以必须在这里补一次隐藏，否则会出现截图中「个人备忘却让你选人」的问题 */
+  if(kind==='personal'){ ptsWrap.style.display='none'; whoWrap.style.display='none'; }
+
+  const seg=$('#taskKindSeg');
+  if(seg) seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    kind=b.dataset.tk;
+    seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+    ptsWrap.style.display = kind==='personal' ? 'none' : '';
+    whoWrap.style.display = kind==='personal' ? 'none' : '';
+  });
+
+  $('#tkX').onclick=closeModal;
+  $('#tkCancel').onclick=closeModal;
+  $('#tkSave').onclick=async ()=>{
+    const title=$('#tkTitle').value.trim();
+    if(!title){ toast('请填写任务标题'); return; }
+    const assignees=[...document.querySelectorAll('.tk-who:checked')].map(x=>x.value);
+    if(kind==='assign' && !assignees.length){ toast('请至少指派一个人'); return; }
+    const btn=$('#tkSave'); btn.disabled=true; btn.textContent=isEdit?'保存中…':'发布中…';
+    try{
+      if(isEdit){
+        const payload={ id:t.id, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value };
+        if(isAdmin && t.kind==='assign'){ payload.points=Number($('#tkPoints').value)||0; payload.assignees=assignees; }
+
+        const r=await api('/api/tasks/update',{method:'POST',body:JSON.stringify(payload)});
+        if(r && r.ok){ closeModal(); toast('已保存修改'); await loadState(); renderTask(); }
+        else { toast((r&&r.error)||'保存失败'); btn.disabled=false; btn.textContent='保存修改'; }
+      } else {
+        const payload={ kind, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value,
+                        points:Number($('#tkPoints').value)||0, assignees };
+        const r=await api('/api/tasks/create',{method:'POST',body:JSON.stringify(payload)});
+        if(r && r.ok){ closeModal(); toast(kind==='assign'?'任务已发布':'待办已添加'); await loadState(); renderTask(); }
+        else { toast((r&&r.error)||'发布失败'); btn.disabled=false; btn.textContent='发布'; }
+      }
+    }catch(e){ toast((isEdit?'保存':'发布')+'失败：'+e.message); btn.disabled=false; btn.textContent=isEdit?'保存修改':'发布'; }
+  };
+}
+
+/* ---------- 任务明细：弹窗 ---------- */
+function openTaskDetail(id){
+  const t=(DB.tasks||[]).find(x=>x.id===id);
+  if(!t) return;
+  const st=taskStat(t), me=DB.me.displayName, isAdmin=isAdminRole();
+  const canEdit = taskCanEdit(t);          // 管理员 或 任务发布人（权限矩阵，2026-10-26）
+  const mine = t.kind==='assign' ? (t.assignees||[]).indexOf(me)>=0 : t.owner===me;
+  const iDone=(t.done||[]).some(d=>d.name===me);
+  const left=taskDaysLeft(t.due), overdue=taskIsOverdue(t,st);
+  let dueTxt='未设置';
+  if(t.due){ dueTxt = st.allDone ? t.due : (left<0 ? (t.due+'（已逾期 '+Math.abs(left)+' 天）') : (left===0?'今天截止（'+t.due+'）':(t.due+'（剩 '+left+' 天）'))); }
+  const people = t.kind==='personal'
+    ? `<span class="pill ${iDone?'p-green':'p-gray'}">${esc(t.owner)}${iDone?' ✓':''}</span>`
+    : (t.assignees||[]).map(n=>{
+        const d=(t.done||[]).find(x=>x.name===n);
+        return `<span class="pill ${d?'p-green':'p-gray'}" title="${d?('完成于 '+taskFmtTime(d.at)):'未完成'}">${esc(n)}${d?' ✓':''}</span>`;
+      }).join('');
+  const files=(t.files||[]).length
+    ? (t.files||[]).map((f,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+         <span>📎 ${esc(f.name)}</span><span class="mini" style="color:var(--muted)">${f.size?(f.size<1024?(f.size+'B'):((f.size/1024).toFixed(0)+'KB')):''}</span>
+         <span style="flex:1"></span>
+         ${f.file?`<button class="btn" data-dl="${esc(f.file)}" data-dlname="${esc(f.name)}" style="padding:4px 10px">下载</button>`:''}
+       </div>`).join('')
+    : '<div class="mini" style="color:var(--muted)">无附件</div>';
+
+  $('#modal').innerHTML = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <span class="pill ${t.kind==='assign'?'p-blue':'p-purple'}">${t.kind==='assign'?'指派任务':'个人备忘'}</span>
+          ${st.allDone?'<span class="pill p-green">已完成</span>':''}
+          ${t.closed && !st.allDone?'<span class="pill p-gray">已结束</span>':''}
+          ${overdue?'<span class="pill p-red">逾期</span>':''}
+        </div>
+        <h3 style="margin:0;font-size:19px">${esc(t.title)}</h3>
+      </div>
+      <button class="btn ghost" id="tdX" style="padding:6px 10px">✕</button>
+    </div>
+
+    ${t.desc?`<div class="hint" style="margin-top:12px;line-height:1.7;white-space:pre-wrap">${esc(t.desc)}</div>`:''}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+      <div class="mini"><b>截止日期</b><br>${esc(dueTxt)}</div>
+      <div class="mini"><b>${t.kind==='assign'?'每人点数':'类型'}</b><br>${t.kind==='assign'?(st.pts+' 点'):'个人备忘（不计点）'}</div>
+      <div class="mini"><b>发布人</b><br>${esc(t.createdBy||'-')} · ${esc(taskFmtTime(t.createdAt))}</div>
+      <div class="mini"><b>完成进度</b><br><b style="color:${st.allDone?'var(--green)':'var(--brand)'};font-size:14px">${st.done}/${st.total} 人${t.kind==='assign'?(' · '+st.donePts+'/'+st.totalPts+' 点'):''} · ${st.pct}%</b></div>
+    </div>
+
+    <div class="bar" style="margin-top:10px;height:8px"><i style="width:${st.pct}%;background:${st.allDone?'linear-gradient(90deg,#22c55e,#16a34a)':'linear-gradient(90deg,#3b82f6,#2563eb)'}"></i></div>
+
+    <div style="margin-top:16px"><b style="font-size:13px">${t.kind==='assign'?'指派人员':'归属'}</b>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${people}</div>
+    </div>
+
+    ${st.done?`<div style="margin-top:12px">
+      <b style="font-size:13px">完成记录</b>
+      ${(t.done||[]).map(d=>`<div class="mini" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px">
+        <b style="color:var(--ink)">${esc(d.name)}</b> · ${esc(taskFmtTime(d.at))}
+        ${d.note?`<div style="margin-top:4px;color:var(--muted)">${esc(d.note)}</div>`:''}
+        ${(d.files||[]).length?`<div style="margin-top:6px">${(d.files||[]).map(f=>`<button class="btn" data-dl="${esc(f.file)}" data-dlname="${esc(f.name)}" style="padding:3px 9px;margin-right:6px;font-size:12px">📎 ${esc(f.name)}</button>`).join('')}</div>`:'<div style="margin-top:4px;color:var(--line)">无附件</div>'}
+        ${canEdit?`<div style="margin-top:6px"><span data-td-reopen="${esc(d.name)}" style="color:var(--red);cursor:pointer;text-decoration:underline">撤销该完成</span></div>`:''}
+      </div>`).join('')}
+    </div>`:''}
+
+    <div style="margin-top:16px"><b style="font-size:13px">附件（${(t.files||[]).length}）</b><div style="margin-top:6px">${files}</div></div>
+
+    ${/* 2026-10-26 用户要求：点开待办就能直接填工作说明 + 传附件，不再跳第二次弹窗 */''}
+    ${mine && !iDone && !t.closed && !st.allDone ? `<div id="tdDoneBox" style="margin-top:18px;border:1px dashed var(--brand);border-radius:12px;padding:14px;background:rgba(45,157,90,.04)">
+      <div style="font-weight:800;font-size:13.5px;margin-bottom:10px">我的完成${t.kind==='assign'?` <span class="mini" style="font-weight:600;color:var(--muted)">完成后计 ${st.pts} 点，自动计入工作量点数</span>`:''}</div>
+      <div class="field"><label>工作说明</label>
+        <textarea id="tdNote" rows="3" placeholder="做了什么、结果在哪里…" style="resize:vertical"></textarea></div>
+      <div class="field" style="margin-top:10px"><label>交付附件（可选，单个 ≤10MB，最多 8 个）</label>
+        <input type="file" id="tdFiles" multiple style="padding:8px">
+        <div id="tdFileList" class="mini" style="margin-top:6px;color:var(--muted)">未选择附件</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+        <button class="btn primary" id="tdSubmit">确认完成</button>
+      </div>
+    </div>`:''
+    }
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">
+      ${canEdit ? `<button class="btn" id="tdEdit">编辑</button>`:''}
+      ${canEdit && t.closed ? `<button class="btn" id="tdReopenTask">重新开启</button>`:''}
+      ${canEdit && !t.closed && !st.allDone ? `<button class="btn" id="tdCloseTask">结束</button>`:''}
+      ${canEdit ? `<button class="btn ghost" id="tdDel" style="color:var(--red)">删除</button>`:''}
+      <button class="btn" id="tdCancel">关闭</button>
+    </div>`;
+  $('#modalBg').classList.add('show');
+
+  $('#tdX').onclick=closeModal;
+  $('#tdCancel').onclick=closeModal;
+  /* 内联完成：说明 + 附件一次提交 */
+  const submit=$('#tdSubmit');
+  if(submit){
+    let picked=[];
+    const fl=$('#tdFileList');
+    const paint=()=>{
+      if(!picked.length){ fl.textContent='未选择附件'; return; }
+      fl.innerHTML=picked.map((f,i)=>`<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;margin:0 6px 6px 0">📎 ${esc(f.name)} <span style="color:var(--muted)">${f.size<1024?(f.size+'B'):((f.size/1024).toFixed(0)+'KB')}</span> <a href="javascript:void 0" data-td-rm="${i}" style="color:var(--red)">移除</a></span>`).join('');
+      fl.querySelectorAll('[data-td-rm]').forEach(a=>a.onclick=()=>{ picked.splice(Number(a.dataset.tdRm),1); paint(); });
+    };
+    paint();
+    $('#tdFiles').onchange = async (ev)=>{
+      const fs=[...ev.target.files];
+      if(picked.length+fs.length>8){ toast('附件最多 8 个'); ev.target.value=''; return; }
+      for(const f of fs){
+        if(f.size>10*1024*1024){ toast('「'+f.name+'」超过 10MB，已跳过'); continue; }
+        const dataUrl=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(f); });
+        picked.push({ name:f.name, type:f.type||'', size:f.size, dataUrl });
+      }
+      ev.target.value=''; paint();
+    };
+    submit.onclick=async ()=>{
+      submit.disabled=true; submit.textContent='提交中…';
+      try{
+        const payload={ id:t.id, note:$('#tdNote').value.trim(),
+                        files: picked.map(f=>({ name:f.name, type:f.type, data:(f.dataUrl.split(',')[1]||null) })) };
+        const r=await api('/api/tasks/complete',{method:'POST',body:JSON.stringify(payload)});
+        if(r && r.ok){ closeModal(); toast(r.awarded?('已完成，计入 '+r.awarded+' 点'):'已完成'); await loadState(); renderTask(); }
+        else { toast((r&&r.error)||'操作失败'); submit.disabled=false; submit.textContent='确认完成'; }
+      }catch(e){ toast('操作失败：'+e.message); submit.disabled=false; submit.textContent='确认完成'; }
+    };
+  }
+  const dcl=$('#tdCloseTask'); if(dcl) dcl.onclick=()=>{ closeModal(); toggleTaskClosed(t.id,false); };
+  const dro=$('#tdReopenTask'); if(dro) dro.onclick=()=>{ closeModal(); toggleTaskClosed(t.id,true); };
+  const ddel=$('#tdDel'); if(ddel) ddel.onclick=()=>{ closeModal(); deleteTask(t.id); };
+  const dedit=$('#tdEdit'); if(dedit) dedit.onclick=()=>{ closeModal(); openTaskForm(t); };
+  $('#modal').querySelectorAll('[data-td-reopen]').forEach(a=>a.onclick=()=>{ closeModal(); reopenTaskDone(t.id, a.dataset.tdReopen); });
+  $('#modal').querySelectorAll('[data-dl]').forEach(b=>b.onclick=()=>downloadEvidence(b.dataset.dl, b, b.dataset.dlname));
+}
+
+/* 标记完成 → 弹窗：填完成说明 + 上传交付附件（2026-10-26 用户要求：附件在这一步交） */
+function openCompleteModal(id){
+  const t=(DB.tasks||[]).find(x=>x.id===id); if(!t) return;
+  const pts=Number(t.points)||0;
+  $('#modal').innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h3 style="margin:0">完成任务</h3>
+      <button class="btn ghost" id="cpX" style="padding:6px 10px">✕</button>
+    </div>
+    <div style="font-weight:800;font-size:15px;margin-bottom:6px">${esc(t.title)}</div>
+    <div class="mini" style="color:var(--muted);margin-bottom:14px">
+      ${t.kind==='assign'?`完成后计 <b style="color:var(--brand)">${pts}</b> 点，自动计入工作量点数`:'个人备忘（不计点）'}
+    </div>
+    <div class="field"><label>完成说明（可选）</label>
+      <textarea id="cpNote" rows="3" placeholder="做了什么、结果在哪里…" style="resize:vertical"></textarea></div>
+    <div class="field" style="margin-top:10px"><label>交付附件（可选，单个 ≤10MB，最多 8 个）</label>
+      <input type="file" id="cpFiles" multiple style="padding:8px">
+      <div id="cpFileList" class="mini" style="margin-top:6px;color:var(--muted)">未选择附件</div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" id="cpCancel">取消</button>
+      <button class="btn primary" id="cpSave">确认完成</button>
+    </div>`;
+  $('#modalBg').classList.add('show');
+
+  let picked=[];
+  const fl=$('#cpFileList');
+  const paint=()=>{
+    if(!picked.length){ fl.textContent='未选择附件'; return; }
+    fl.innerHTML=picked.map((f,i)=>`<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;margin:0 6px 6px 0">📎 ${esc(f.name)} <span style="color:var(--muted)">${f.size<1024?(f.size+'B'):((f.size/1024).toFixed(0)+'KB')}</span> <a href="javascript:void 0" data-rm="${i}" style="color:var(--red)">移除</a></span>`).join('');
+    fl.querySelectorAll('[data-rm]').forEach(a=>a.onclick=()=>{ picked.splice(Number(a.dataset.rm),1); paint(); });
+  };
+  paint();
+
+  $('#cpFiles').onchange = async (ev)=>{
+    const files=[...ev.target.files];
+    if(picked.length+files.length>8){ toast('附件最多 8 个'); ev.target.value=''; return; }
+    for(const f of files){
+      if(f.size>10*1024*1024){ toast('「'+f.name+'」超过 10MB，已跳过'); continue; }
+      const dataUrl=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(f); });
+      picked.push({ name:f.name, type:f.type||'', size:f.size, dataUrl });
+    }
+    ev.target.value=''; paint();
+  };
+
+  $('#cpX').onclick=closeModal;
+  $('#cpCancel').onclick=closeModal;
+  $('#cpSave').onclick=async ()=>{
+    const btn=$('#cpSave'); btn.disabled=true; btn.textContent='提交中…';
+    try{
+      const payload={ id:t.id, note:$('#cpNote').value.trim(),
+                      files: picked.map(f=>({ name:f.name, type:f.type, data:(f.dataUrl.split(',')[1]||null) })) };
+      const r=await api('/api/tasks/complete',{method:'POST',body:JSON.stringify(payload)});
+      if(r && r.ok){
+        closeModal();
+        toast(r.awarded ? ('已完成，计入 '+r.awarded+' 点') : '已完成');
+        await loadState(); renderTask();
+      } else { toast((r&&r.error)||'操作失败'); btn.disabled=false; btn.textContent='确认完成'; }
+    }catch(e){ toast('操作失败：'+e.message); btn.disabled=false; btn.textContent='确认完成'; }
+  };
+}
+function markTaskDone(id){ openCompleteModal(id); }
+async function reopenTaskDone(id,name){
+  if(!confirm('撤销「'+name+'」在这个任务上的完成记录？')) return;
+  try{
+    const r=await api('/api/tasks/reopen',{method:'POST',body:JSON.stringify({id,name})});
+    if(r && r.ok){ toast('已撤销'); await loadState(); renderTask(); }
+    else toast((r&&r.error)||'操作失败');
+  }catch(e){ toast('操作失败：'+e.message); }
+}
+async function toggleTaskClosed(id, isClosed){
+  try{
+    const r=await api('/api/tasks/update',{method:'POST',body:JSON.stringify({id,closed:!isClosed})});
+    if(r && r.ok){ toast(isClosed?'已重新开启':'已结束该任务'); await loadState(); renderTask(); }
+    else toast((r&&r.error)||'操作失败');
+  }catch(e){ toast('操作失败：'+e.message); }
+}
+async function deleteTask(id){
+  const t=(DB.tasks||[]).find(x=>x.id===id); if(!t) return;
+  if(!confirm('删除任务「'+t.title+'」？删除后不可恢复（会写审计日志）。')) return;
+  try{
+    const r=await api('/api/tasks/delete',{method:'POST',body:JSON.stringify({id})});
+    if(r && r.ok){ toast('已删除'); await loadState(); renderTask(); }
+    else toast((r&&r.error)||'删除失败');
+  }catch(e){ toast('删除失败：'+e.message); }
+}
 
 /* ============================================================
    工单导入
@@ -3639,6 +4131,7 @@ function renderConfig(){
     <button data-t="wt">工作类型及点数</button>
     <button data-t="step">各国注册步骤</button>
     <button data-t="user">员工账号</button>
+    <button data-t="perm">权限规则</button>
   </div>
   <div id="cfgBody"></div>`;
   $('#cfgTabs').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return;
@@ -3655,6 +4148,40 @@ function renderCfgBody(t){
   const body=$('#cfgBody');
   // 二次防线：非管理员即便通过脚本调用，也只会落到「各国注册步骤」
   if(!isAdminRole() && t!=='step') t='step';
+  if(t==='perm'){
+    const row=(op,a,b,c)=>`<tr><td style="padding:8px 10px;border-bottom:1px solid var(--line)">${op}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--line);text-align:center">${a}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--line);text-align:center">${b}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid var(--line);text-align:center">${c}</td></tr>`;
+    body.innerHTML=`<div class="card">
+      <h3>待办任务 · 权限规则</h3>
+      <div class="hint" style="margin-bottom:12px">页面按钮与接口都按这张表执行：界面上看不到的按钮，绕过界面直接调接口也会被拒绝（403）。</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--bg)">
+          <th style="text-align:left;padding:8px 10px">操作</th><th style="padding:8px 10px">管理员 / 最高权限</th>
+          <th style="padding:8px 10px">任务发布人（本人）</th><th style="padding:8px 10px">被指派者 / 其他工作人员</th>
+        </tr></thead>
+        <tbody>
+          ${row('查看任务列表','全部','全部','全部（看不到别人的个人备忘）')}
+          ${row('新建指派任务（要人 + 点数）','✔','✘','✘')}
+          ${row('新建个人备忘','✔','✔（仅自己）','✔（仅自己）')}
+          ${row('编辑标题 / 说明 / 截止日期','✔','✔（仅自己发布的）','✘')}
+          ${row('修改每人点数','✔','✘','✘')}
+          ${row('增删指派人员','✔','✘','✘')}
+          ${row('标记完成','✔（可代标任何人）','仅本人','仅本人')}
+          ${row('撤销某人完成记录','✔','✔（仅自己发布的）','✘')}
+          ${row('结束 / 重新开启任务','✔','✔（仅自己发布的）','✘')}
+          ${row('删除任务','✔','✔（仅自己发布的）','✘')}
+          ${row('查看他人个人备忘','✔','✘','✘')}
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top:12px">补充说明：<br>
+        ・「任务发布人」指该任务的创建者；管理员创建的任务，非管理员不能改。<br>
+        ・工作人员即使被指派，也只能标记自己完成，不能改内容、不能替别人标记。<br>
+        ・个人备忘属于私人清单，除本人与管理员外，别人在接口层就取不到（不只是界面隐藏）。</div>
+    </div>`;
+    return;
+  }
   if(t==='mgr'){
     async function loadUserList(){ try{ const r=await api('/api/users'); DB.users=r.users; paintMgr(); }catch(e){ toast('加载账号失败：'+e.message); } }
     body.innerHTML=`<div class="card">

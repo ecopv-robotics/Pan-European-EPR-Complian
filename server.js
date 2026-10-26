@@ -249,7 +249,8 @@ const DEFAULT_WORKTYPES = [
   {id:'wt_pro',name:'PRO邮件沟通',points:4,builtin:true},
   {id:'wt_sop',name:'SOP文件制作',points:5,builtin:true},
   {id:'wt_audit',name:'文件审核',points:4,builtin:true},
-  {id:'wt_cross',name:'跨国家协助工作',points:7,builtin:true}
+  {id:'wt_cross',name:'跨国家协助工作',points:7,builtin:true},
+  {id:'wt_todo',name:'待办任务',points:1,builtin:true}   // 点数由具体任务决定，这里的 1 只是兜底默认值
 ];
 
 /* ---------- 数据存取 ---------- */
@@ -429,12 +430,28 @@ function initDB(){
     users: [],
     config: { managers: {}, workTypes: DEFAULT_WORKTYPES.map(w=>({...w})), steps: {}, weights: {} },
     workOrders: [],
-    daily: []
+    daily: [],
+    tasks: []
   };
   SEED_USERS.forEach(([u, name, role, pw]) => d.users.push(makeUser(u, name, role, pw)));
   return d;
 }
 let DB = loadDB();
+/* 老库自愈（2026-10-26 待办任务上线）：早期 data.json 没有 tasks 字段，
+   缺了就补空数组，不触碰任何既有数据。 */
+if (!Array.isArray(DB.tasks)) DB.tasks = [];
+/* 「待办任务」这个内置工作类型是 2026-10-26 新增的 —— 老库的 config.workTypes 里没有，
+   补一条，否则完成待办写进 daily 后，报表/点数页会把它显示成原始 id「wt_todo」。 */
+(() => {
+  try {
+    if (!DB.config) DB.config = {};
+    if (!Array.isArray(DB.config.workTypes)) DB.config.workTypes = DEFAULT_WORKTYPES.map(w => ({ ...w }));
+    if (!DB.config.workTypes.some(w => w && w.id === 'wt_todo')) {
+      const def = DEFAULT_WORKTYPES.find(w => w.id === 'wt_todo');
+      DB.config.workTypes.push(def ? { ...def } : { id: 'wt_todo', name: '待办任务', points: 1, builtin: true });
+    }
+  } catch (e) { console.error('workTypes 自愈失败', e); }
+})();
 // 启动自愈（工单为 0 时从最近快照恢复）+ 首次运行先留一份底档
 autoHealIfEmpty();
 try { if (!listBackups().length) writeSnapshot('startup'); } catch (e) { console.error('启动留档失败', e); }
@@ -895,7 +912,13 @@ async function handleApi(req, res, pathname){
       users: DB.users.map(publicUser),
       config: DB.config,
       workOrders: DB.workOrders,
-      daily: DB.daily
+      daily: DB.daily,
+      /* 待办任务的可见范围（2026-10-26 权限规定，用户明确要求「专员只能看到自己的待办」）：
+         管理员 → 全部；专员 → 指派给自己的（assignees 含本人）+ 自己建的个人备忘。
+         个人备忘对他人一律不可见（连标题都取不到）。 */
+      tasks: (DB.tasks || []).filter(t => isAdminLike(user)
+        || (t.kind === 'personal' ? t.owner === user.displayName
+                                  : (t.assignees || []).indexOf(user.displayName) >= 0))
     });
   }
 
@@ -1463,6 +1486,254 @@ async function handleApi(req, res, pathname){
     saveDBNow(DB);
     audit(user, 'reset-orders', scopeText + ' 删除工单 ' + removed + ' 条 / 工作量 ' + dailyRemoved + ' 条（已存底档 ' + (snap || '失败') + '）');
     return send(res, 200, { ok: true, removed, dailyRemoved, remaining: DB.workOrders.length, scope: scopeText, snapshot: snap });
+  }
+
+  /* ---------- 待办任务权限矩阵（2026-10-26 用户要求） ----------
+      角色：root/admin（管理员）> specialist（专员/工作人员）
+      ┌────────────────────┬──────────┬──────────────┬──────────────┐
+      │ 操作               │ 管理员   │ 发布人(本人) │ 被指派者/他人│
+      ├────────────────────┼──────────┼──────────────┼──────────────┤
+      │ 查看任务           │ 全部     │ 全部         │ 全部（个人备忘除外）│
+      │ 查看个人备忘       │ 全部     │ 仅自己的     │ 看不见       │
+      │ 新建指派任务       │ ✔        │ ✘            │ ✘            │
+      │ 新建个人备忘       │ ✔        │ ✔（自己的）  │ ✔（自己的）  │
+      │ 编辑内容/截止/点数 │ ✔        │ ✔（自己发布）│ ✘            │
+      │ 改指派人员         │ ✔        │ ✘            │ ✘            │
+      │ 标记完成           │ ✔ 可代标 │ 仅自己       │ 仅自己       │
+      │ 撤销某人完成       │ ✔        │ ✔（自己发布）│ ✘            │
+      │ 结束 / 重新开启    │ ✔        │ ✔（自己发布）│ ✘            │
+      │ 删除任务           │ ✔        │ ✔（自己发布）│ ✘            │
+      └────────────────────┴──────────┴──────────────┴──────────────┘
+      说明：非管理员改任务时**只允许改文本字段**（标题/说明/截止日期），
+            点数与指派人员只有管理员能动 —— 避免专员给自己加价或把人塞进别人的任务。 */
+  const canViewTask = (t, u) => t.kind !== 'personal' || isAdminLike(u) || t.owner === u.displayName;
+  const isTaskCreator = (t, u) => !!t.createdBy && t.createdBy === u.displayName;
+  const canEditTask = (t, u) => isAdminLike(u) || isTaskCreator(t, u);
+  const canManageTask = (t, u) => isAdminLike(u) || isTaskCreator(t, u);   // 结束/重新开启/删除/撤销完成
+
+  /* ---------- 待办任务（2026-10-26 原型） ----------
+     两类任务：
+       kind='assign'  指派任务：管理员发布 → 指定若干人 + 截止日期 + 每人点数 → 各自完成后计分
+       kind='personal' 个人待办：自己给自己记的备忘（不走点数，只跟踪完成）
+     进度口径：完成人数 / 应完成人数；点数进度 = 已完成人数×每人点数 / 总人数×每人点数（如 30/50）。
+     ⚠️ 原型阶段**不写入 daily**（不动工作量点数体系），分数只在任务模块内累计，
+        是否并入「工作量点数」待确认后再接。 */
+  if (pathname === '/api/tasks/create' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const kind = body.kind === 'personal' ? 'personal' : 'assign';
+    const title = String(body.title || '').trim();
+    if (!title) return send(res, 400, { error: '缺少任务标题' });
+    if (title.length > 120) return send(res, 400, { error: '标题过长（≤120 字）' });
+    const desc = String(body.desc || '').slice(0, 2000);
+    const due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due || '')) ? String(body.due) : '';
+    let points = Number(body.points);
+    if (!Number.isFinite(points) || points < 0) points = 0;
+    points = Math.round(points * 100) / 100;
+    const me = user.displayName;
+    if (kind === 'assign' && !isAdminLike(user)) return send(res, 403, { error: '只有管理员可以发布指派任务' });
+    let assignees = [];
+    if (kind === 'assign') {
+      const names = new Set(DB.users.map(u => u.displayName));
+      assignees = [...new Set((Array.isArray(body.assignees) ? body.assignees : []).map(x => String(x)).filter(x => names.has(x)))];
+      if (!assignees.length) return send(res, 400, { error: '至少要指派一个人（只接受系统内的账号）' });
+      if (assignees.length > 200) return send(res, 400, { error: '单次指派人数过多（≤200）' });
+    }
+    const t = {
+      id: 'tk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      kind, title, desc, due, points,
+      assignees,
+      owner: kind === 'personal' ? me : '',
+      done: [],
+      files: [],
+      createdBy: me, createdAt: new Date().toISOString(),
+      closed: false
+    };
+    /* 附件（2026-10-26 需求）：与「其他工作」的凭证同一套落盘方式 —— base64 写进 uploads/，
+       任务里只存 {name,type,file,size}，前端下载走 /uploads/<file>（需带令牌）。
+       上限：单文件 ≤10MB、单任务 ≤8 个，超出直接 400，避免一次请求把整库落盘拖垮。 */
+    const filesIn = Array.isArray(body.files) ? body.files : [];
+    if (filesIn.length > 8) return send(res, 400, { error: '附件最多 8 个' });
+    for (const f of filesIn) {
+      if (!f || !f.data) continue;
+      let buf;
+      try { buf = Buffer.from(String(f.data), 'base64'); } catch (e) { continue; }
+      if (!buf.length) continue;
+      if (buf.length > 10 * 1024 * 1024) return send(res, 400, { error: '单个附件不能超过 10MB：' + String(f.name || '') });
+      const origin = String(f.name || 'file');
+      const ext = (origin.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+      const fn = 'tki_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex') + '.' + ext;
+      try {
+        fs.writeFileSync(path.join(UPLOADS, fn), buf);
+        t.files.push({ name: origin.slice(0, 160), type: String(f.type || ''), file: fn, size: buf.length });
+      } catch (err) { console.error('任务附件保存失败', err); }
+    }
+    DB.tasks.push(t);
+    saveDBNow(DB);
+    audit(user, 'task-create', (kind === 'assign' ? '发布指派任务' : '新增个人待办') + '：' + title
+      + (kind === 'assign' ? '｜指派 ' + assignees.length + ' 人，每人 ' + points + ' 点，截止 ' + (due || '未设') : ''));
+    return send(res, 200, { ok: true, task: t });
+  }
+
+  if (pathname === '/api/tasks/complete' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const t = (DB.tasks || []).find(x => x.id === String(body.id || ''));
+    if (!t) return send(res, 404, { error: '任务不存在（可能已被删除，请刷新）' });
+    if (t.closed) return send(res, 400, { error: '该任务已结束，不能再标记完成' });
+    const me = user.displayName;
+    const isAssignee = t.kind === 'personal' ? t.owner === me : t.assignees.indexOf(me) >= 0;
+    if (!isAssignee && !isAdminLike(user)) return send(res, 403, { error: '只有被指派的人可以标记完成' });
+    const target = (isAssignee ? me : String(body.name || '')).trim();
+    if (!target) return send(res, 400, { error: '请指定要标记完成的人' });
+    if (t.kind === 'assign' && t.assignees.indexOf(target) < 0) return send(res, 400, { error: target + ' 不在这个任务的指派名单里' });
+    if (t.done.some(d => d.name === target)) return send(res, 200, { ok: true, duplicate: true, task: t });
+
+    /* 完成时上传交付附件（2026-10-26 用户要求：附件在**完成任务**时提交，新建任务不需要） */
+    const doneFiles = [];
+    const filesIn = Array.isArray(body.files) ? body.files : [];
+    if (filesIn.length > 8) return send(res, 400, { error: '单个任务最多 8 个交付附件' });
+    for (const f of filesIn) {
+      if (!f || !f.data) continue;
+      let buf;
+      try { buf = Buffer.from(String(f.data), 'base64'); } catch (e) { continue; }
+      if (!buf.length) continue;
+      if (buf.length > 10 * 1024 * 1024) return send(res, 400, { error: '单个附件不能超过 10MB：' + String(f.name || '') });
+      const origin = String(f.name || 'file');
+      const ext = (origin.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+      const fn = 'tkd_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex') + '.' + ext;
+      try {
+        fs.writeFileSync(path.join(UPLOADS, fn), buf);
+        doneFiles.push({ name: origin.slice(0, 160), type: String(f.type || ''), file: fn, size: buf.length });
+      } catch (err) { console.error('完成附件保存失败', err); }
+    }
+
+    t.done.push({ name: target, at: new Date().toISOString(), note: String(body.note || '').slice(0, 300), files: doneFiles });
+    if (t.kind === 'personal' && t.done.length) t.closed = true;
+
+    /* 发放点数（2026-10-26）：完成任务即写一条工作量记录，进入「工作量点数」与报表。
+       业务键 task|<任务id>|<完成人> 保证同一任务同一个人只发一次；撤销完成时按同键删除。 */
+    let dailyId = '';
+    const pts = Number(t.points) || 0;
+    if (pts > 0) {
+      const bizKey = 'task|' + t.id + '|' + target;
+      if (!DB.daily.some(d => d && d.bizKey === bizKey)) {
+        dailyId = 'd' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        DB.daily.push({
+          id: dailyId, date: todayStr(), type: 'wt_todo', agent: target,
+          country: '', serviceItem: '', orderNo: '',
+          note: '完成任务：' + t.title,
+          points: pts, evidence: [], done: false, bizKey,
+          taskId: t.id
+        });
+      }
+    }
+
+    saveDBNow(DB);
+    audit(user, 'task-complete', '完成任务「' + t.title + '」→ ' + target + (target !== me ? '（管理员代标）' : '')
+      + (dailyId ? '，发放 ' + pts + ' 点（' + dailyId + '）' : '（0 点，不记工作量）'));
+    return send(res, 200, { ok: true, task: t, awarded: dailyId ? pts : 0, dailyId });
+  }
+
+  if (pathname === '/api/tasks/reopen' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const t = (DB.tasks || []).find(x => x.id === String(body.id || ''));
+    if (!t) return send(res, 404, { error: '任务不存在' });
+    if (!canManageTask(t, user)) return send(res, 403, { error: '只有管理员或任务发布人可以撤销完成记录' });
+    const before = t.done.length;
+    t.done = t.done.filter(d => d.name !== String(body.name || ''));
+    if (t.kind === 'personal' && !t.done.length) t.closed = false;
+    if (before === t.done.length) return send(res, 200, { ok: true, unchanged: true, task: t });
+    /* 撤销完成要回收已发的点数，否则点数会「只增不减」 */
+    const bizKey = 'task|' + t.id + '|' + String(body.name || '');
+    const beforeDaily = DB.daily.length;
+    DB.daily = DB.daily.filter(d => !(d && d.bizKey === bizKey));
+    const reclaimed = beforeDaily - DB.daily.length;
+    saveDBNow(DB);
+    audit(user, 'task-reopen', '撤销完成「' + t.title + '」→ ' + String(body.name || '') + (reclaimed ? '，回收工作量记录 ' + reclaimed + ' 条' : ''));
+    return send(res, 200, { ok: true, task: t, reclaimed });
+  }
+
+  if (pathname === '/api/tasks/update' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const t = (DB.tasks || []).find(x => x.id === String(body.id || ''));
+    if (!t) return send(res, 404, { error: '任务不存在' });
+    if (!canEditTask(t, user)) return send(res, 403, { error: '只有管理员或任务发布人可以修改任务' });
+    if (!isAdminLike(user)) {
+      /* 专员（即便他是发布人）只能改文本类字段：点数 / 指派人员 / 结束状态一律拒绝 */
+      const forbidden = ['points', 'assignees', 'closed'].filter(k => body[k] !== undefined);
+      if (forbidden.length) return send(res, 403, { error: '点数、指派人员、结束状态只有管理员可以修改' });
+    }
+    const changes = [];
+    if (body.title !== undefined) { const v = String(body.title).trim(); if (!v) return send(res, 400, { error: '标题不能为空' }); t.title = v.slice(0, 120); changes.push('标题'); }
+    if (body.desc !== undefined) { t.desc = String(body.desc).slice(0, 2000); changes.push('说明'); }
+    if (body.due !== undefined) { t.due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due || '')) ? String(body.due) : ''; changes.push('截止日期'); }
+    if (body.points !== undefined) { let p = Number(body.points); t.points = (Number.isFinite(p) && p >= 0) ? Math.round(p * 100) / 100 : 0; changes.push('点数'); }
+    if (body.closed !== undefined) { t.closed = !!body.closed; changes.push(t.closed ? '结束' : '重新开启'); }
+    /* 附件增删（2026-10-26 用户要求「编辑时也要能上传文件」）：
+       files 追加新附件（base64），removeFiles 传已有附件的 file 名表示删除。
+       权限同「编辑」：管理员或任务发布人。 */
+    if (Array.isArray(body.removeFiles) && body.removeFiles.length) {
+      const rm = new Set(body.removeFiles.map(x => String(x)));
+      const keep = [];
+      for (const f of (t.files || [])) {
+        if (rm.has(f.file)) {
+          try { fs.unlinkSync(path.join(UPLOADS, f.file)); } catch (e) {}
+        } else keep.push(f);
+      }
+      t.files = keep;
+      changes.push('删除附件 ' + (rm.size));
+    }
+    if (Array.isArray(body.files) && body.files.length) {
+      if ((t.files || []).length + body.files.length > 8) return send(res, 400, { error: '附件最多 8 个' });
+      let added = 0;
+      for (const f of body.files) {
+        if (!f || !f.data) continue;
+        let buf;
+        try { buf = Buffer.from(String(f.data), 'base64'); } catch (e) { continue; }
+        if (!buf.length) continue;
+        if (buf.length > 10 * 1024 * 1024) return send(res, 400, { error: '单个附件不能超过 10MB：' + String(f.name || '') });
+        const origin = String(f.name || 'file');
+        const ext = (origin.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+        const fn = 'tki_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex') + '.' + ext;
+        try {
+          fs.writeFileSync(path.join(UPLOADS, fn), buf);
+          t.files.push({ name: origin.slice(0, 160), type: String(f.type || ''), file: fn, size: buf.length });
+          added++;
+        } catch (err) { console.error('任务附件保存失败', err); }
+      }
+      if (added) changes.push('新增附件 ' + added);
+    }
+    if (body.assignees !== undefined && t.kind === 'assign') {
+      const names = new Set(DB.users.map(u => u.displayName));
+      const next = [...new Set((Array.isArray(body.assignees) ? body.assignees : []).map(x => String(x)).filter(x => names.has(x)))];
+      if (!next.length) return send(res, 400, { error: '至少要保留一个人' });
+      const removed = t.assignees.filter(n => next.indexOf(n) < 0);
+      t.assignees = next;
+      t.done = t.done.filter(d => next.indexOf(d.name) >= 0);   // 移出名单的人，其完成记录一并摘掉
+      changes.push('指派人员' + (removed.length ? '（移除 ' + removed.join('、') + '）' : ''));
+    }
+    saveDBNow(DB);
+    audit(user, 'task-update', '修改任务「' + t.title + '」：' + changes.join('、'));
+    return send(res, 200, { ok: true, task: t });
+  }
+
+  if (pathname === '/api/tasks/delete' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const i = (DB.tasks || []).findIndex(x => x.id === String(body.id || ''));
+    if (i < 0) return send(res, 404, { error: '任务不存在' });
+    if (!canManageTask(DB.tasks[i], user)) return send(res, 403, { error: '只有管理员或任务发布人可以删除任务' });
+    const [rec] = DB.tasks.splice(i, 1);
+    /* 删任务时把已发放的工作量记录一并回收，避免留下无主的点数 */
+    const bf = DB.daily.length;
+    DB.daily = DB.daily.filter(d => !(d && typeof d.bizKey === 'string' && d.bizKey.indexOf('task|' + rec.id + '|') === 0));
+    const reclaimed = bf - DB.daily.length;
+    saveDBNow(DB);
+    audit(user, 'task-delete', '删除任务「' + rec.title + '」' + (reclaimed ? '，回收工作量记录 ' + reclaimed + ' 条' : '') + '｜' + JSON.stringify(rec).slice(0, 800));
+    return send(res, 200, { ok: true, removed: 1 });
   }
 
   /* ---------- 误录撤销（2026-10-24 新增，仅管理员） ----------

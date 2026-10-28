@@ -1255,6 +1255,13 @@ async function handleApi(req, res, pathname){
     rec.points = pts;
     /* 「请求加分」的记录：管理员一经给分即视为已处理（requestBonus 保留，红色高亮消失、改显示「已处理」）。 */
     if (rec.requestBonus) rec.bonusHandled = true;
+    /* 待办任务发起的加分请求（2026-10-28）：给分后要回写任务侧的完成记录，
+       否则任务明细里会一直显示「待管理员处理」，两边状态对不上。 */
+    if (rec.taskId) {
+      const tk = (DB.tasks || []).find(x => x.id === rec.taskId);
+      const dd = tk && (tk.done || []).find(x => x.name === rec.agent);
+      if (dd && dd.bonus) { dd.bonus.handled = true; dd.bonus.points = pts; }
+    }
     audit(user, 'daily-points', '点数 ' + old + ' → ' + pts + '（记录 ' + rec.id + '：' + rec.agent + ' ' + (rec.date || '') + ' ' + rec.type + ' ' + (rec.orderNo || '') + '）');
     saveDBNow(DB);
     return send(res, 200, { ok: true, record: rec });
@@ -1511,6 +1518,13 @@ async function handleApi(req, res, pathname){
   const canEditTask = (t, u) => isAdminLike(u) || isTaskCreator(t, u);
   const canManageTask = (t, u) => isAdminLike(u) || isTaskCreator(t, u);   // 结束/重新开启/删除/撤销完成
 
+  /* 截止时段（2026-10-28 需求）：只保留 12:00 与 18:00 两个时段。
+     与 due（YYYY-MM-DD）分开存，老任务没有 dueTime 时按 18:00 解释，不需要迁移数据；
+     传了非法值一并落到 18:00，避免前端传错导致任务「没有截止时间」。 */
+  const DUE_TIMES = ['12:00', '18:00'];
+  const DEFAULT_DUE_TIME = '18:00';
+  const normDueTime = v => (DUE_TIMES.indexOf(String(v || '')) >= 0 ? String(v) : DEFAULT_DUE_TIME);
+
   /* ---------- 待办任务（2026-10-26 原型） ----------
      两类任务：
        kind='assign'  指派任务：管理员发布 → 指定若干人 + 截止日期 + 每人点数 → 各自完成后计分
@@ -1527,6 +1541,7 @@ async function handleApi(req, res, pathname){
     if (title.length > 120) return send(res, 400, { error: '标题过长（≤120 字）' });
     const desc = String(body.desc || '').slice(0, 2000);
     const due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due || '')) ? String(body.due) : '';
+    const dueTime = normDueTime(body.dueTime);
     let points = Number(body.points);
     if (!Number.isFinite(points) || points < 0) points = 0;
     points = Math.round(points * 100) / 100;
@@ -1541,7 +1556,7 @@ async function handleApi(req, res, pathname){
     }
     const t = {
       id: 'tk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-      kind, title, desc, due, points,
+      kind, title, desc, due, dueTime, points,
       assignees,
       owner: kind === 'personal' ? me : '',
       done: [],
@@ -1571,7 +1586,7 @@ async function handleApi(req, res, pathname){
     DB.tasks.push(t);
     saveDBNow(DB);
     audit(user, 'task-create', (kind === 'assign' ? '发布指派任务' : '新增个人待办') + '：' + title
-      + (kind === 'assign' ? '｜指派 ' + assignees.length + ' 人，每人 ' + points + ' 点，截止 ' + (due || '未设') : ''));
+      + (kind === 'assign' ? '｜指派 ' + assignees.length + ' 人，每人 ' + points + ' 点，截止 ' + (due ? (due + ' ' + dueTime) : '未设') : ''));
     return send(res, 200, { ok: true, task: t });
   }
 
@@ -1635,6 +1650,76 @@ async function handleApi(req, res, pathname){
     return send(res, 200, { ok: true, task: t, awarded: dailyId ? pts : 0, dailyId });
   }
 
+  /* 请求加分（2026-10-28 需求）
+     背景：待办任务的点数是发布时按「标准工作量」定的，实际做完发现差异很大（客户难缠 / 资料缺失 / 反复返工）。
+     口径：领取人对**自己那次完成**发起加分请求（必须带说明；凭证可选），
+          管理员在「工作量点数 → 录入明细」里按原有「改分」流程酌情给分（红色「待加分」标记）。
+     数据落两处，缺一不可：
+       ① task.done[i].bonus = { note, files, at, handled }   —— 任务明细里展示请求状态
+       ② 对应的 wt_todo 工作量记录打 requestBonus=true + 凭证 —— 录入明细里才能被筛出来给分
+     注意：任务点数为 0 时完成阶段没写 daily，这里要**补一条** 0 分记录，否则加分请求无处落地。 */
+  if (pathname === '/api/tasks/request-bonus' && req.method === 'POST') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
+    const t = (DB.tasks || []).find(x => x.id === String(body.id || ''));
+    if (!t) return send(res, 404, { error: '任务不存在（可能已被删除，请刷新）' });
+    if (t.closed) return send(res, 400, { error: '该任务已结束，不能再请求加分' });
+    const me = user.displayName;
+    const isAssignee = t.kind === 'personal' ? t.owner === me : (t.assignees || []).indexOf(me) >= 0;
+    if (!isAssignee && !isAdminLike(user)) return send(res, 403, { error: '只有被指派的人可以为自己的完成请求加分' });
+    const target = (isAssignee ? me : String(body.name || '').trim());
+    if (!target) return send(res, 400, { error: '请指定为谁请求加分' });
+    const doneRec = (t.done || []).find(d => d.name === target);
+    if (!doneRec) return send(res, 400, { error: '还没有完成记录：请先「确认完成」，再请求加分' });
+    const note = String(body.note || '').trim();
+    if (!note) return send(res, 400, { error: '请填写加分理由（说明实际工作量差异）' });
+    if (doneRec.bonus && doneRec.bonus.handled) return send(res, 400, { error: '这次加分管理员已处理过，如需再调请联系管理员' });
+
+    /* 凭证：与完成附件同一套落盘方式，单独用 tke_ 前缀便于区分 */
+    const bonusFiles = [];
+    const filesIn = Array.isArray(body.files) ? body.files : [];
+    if (filesIn.length > 8) return send(res, 400, { error: '加分凭证最多 8 个' });
+    for (const f of filesIn) {
+      if (!f || !f.data) continue;
+      let buf;
+      try { buf = Buffer.from(String(f.data), 'base64'); } catch (e) { continue; }
+      if (!buf.length) continue;
+      if (buf.length > 10 * 1024 * 1024) return send(res, 400, { error: '单个凭证不能超过 10MB：' + String(f.name || '') });
+      const origin = String(f.name || 'file');
+      const ext = (origin.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
+      const fn = 'tke_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex') + '.' + ext;
+      try {
+        fs.writeFileSync(path.join(UPLOADS, fn), buf);
+        bonusFiles.push({ name: origin.slice(0, 160), type: String(f.type || ''), file: fn, size: buf.length });
+      } catch (err) { console.error('加分凭证保存失败', err); }
+    }
+
+    const at = new Date().toISOString();
+    doneRec.bonus = { note: note.slice(0, 1000), files: bonusFiles, at, handled: false, points: 0 };
+
+    /* 同步到工作量记录：有就更新，没有（0 分任务）就补一条 */
+    const bizKey = 'task|' + t.id + '|' + target;
+    let rec = DB.daily.find(d => d && d.bizKey === bizKey);
+    if (!rec) {
+      rec = {
+        id: 'd' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), date: todayStr(),
+        type: 'wt_todo', agent: target, country: '', serviceItem: '', orderNo: '',
+        note: '完成任务：' + t.title, points: Number(t.points) || 0, evidence: [], done: false,
+        bizKey, taskId: t.id
+      };
+      DB.daily.push(rec);
+    }
+    rec.requestBonus = true;
+    rec.bonusHandled = false;
+    rec.bonusNote = String(rec.bonusNote || '') ? rec.bonusNote : note.slice(0, 400);
+    rec.evidence = (rec.evidence || []).concat(bonusFiles.map(f => ({ name: f.name, type: f.type, file: f.file })));
+
+    saveDBNow(DB);
+    audit(user, 'task-request-bonus', '请求加分「' + t.title + '」→ ' + target
+      + '，理由：' + note.slice(0, 60) + '，凭证 ' + bonusFiles.length + ' 个（工作量记录 ' + rec.id + '）');
+    return send(res, 200, { ok: true, task: t, dailyId: rec.id, files: bonusFiles.length });
+  }
+
   if (pathname === '/api/tasks/reopen' && req.method === 'POST') {
     let body = {};
     try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch (e) { return send(res, 400, { error: '请求体不是合法 JSON' }); }
@@ -1670,6 +1755,7 @@ async function handleApi(req, res, pathname){
     if (body.title !== undefined) { const v = String(body.title).trim(); if (!v) return send(res, 400, { error: '标题不能为空' }); t.title = v.slice(0, 120); changes.push('标题'); }
     if (body.desc !== undefined) { t.desc = String(body.desc).slice(0, 2000); changes.push('说明'); }
     if (body.due !== undefined) { t.due = /^\d{4}-\d{2}-\d{2}$/.test(String(body.due || '')) ? String(body.due) : ''; changes.push('截止日期'); }
+    if (body.dueTime !== undefined) { t.dueTime = normDueTime(body.dueTime); changes.push('截止时段'); }
     if (body.points !== undefined) { let p = Number(body.points); t.points = (Number.isFinite(p) && p >= 0) ? Math.round(p * 100) / 100 : 0; changes.push('点数'); }
     if (body.closed !== undefined) { t.closed = !!body.closed; changes.push(t.closed ? '结束' : '重新开启'); }
     /* 附件增删（2026-10-26 用户要求「编辑时也要能上传文件」）：

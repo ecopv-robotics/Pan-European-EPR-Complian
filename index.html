@@ -1993,6 +1993,22 @@ function taskDaysLeft(due){
   const a=new Date(due+'T00:00:00'), b=new Date(taskTodayStr()+'T00:00:00');
   return Math.round((a-b)/86400000);
 }
+/* 截止时段（2026-10-28 需求）：只有 12:00 / 18:00 两档。老任务没有 dueTime 时按 18:00 算。 */
+function taskDueTime(t){
+  const v = t && t.dueTime;
+  return (v==='12:00'||v==='18:00') ? v : '18:00';
+}
+function taskDueTs(t){
+  if(!t || !t.due) return null;
+  const d=new Date(t.due+'T'+taskDueTime(t)+':00');
+  return isNaN(d) ? null : d.getTime();
+}
+/* 卡片/明细上的紧凑写法：10-30 18:00 */
+function taskFmtDue(t){
+  if(!t || !t.due) return '';
+  const p=String(t.due).split('-');
+  return (p[1]||'')+'-'+(p[2]||'')+' '+taskDueTime(t);
+}
 /* 服务端存的是 ISO(UTC)，页面上按浏览器本地时区显示，避免出现「01:33 完成」这种对不上号的时刻 */
 function taskFmtTime(iso){
   if(!iso) return '';
@@ -2006,7 +2022,9 @@ function taskStat(t){
   const pts = Number(t.points)||0;
   return { total, done, pts, totalPts: total*pts, donePts: done*pts, pct: total?Math.round(done/total*100):0, allDone: total>0 && done>=total };
 }
-function taskIsOverdue(t, st){ const d=taskDaysLeft(t.due); return d!==null && d<0 && !st.allDone; }
+/* 逾期判定改用「日期+时段」的绝对时刻：今天 12:00 的任务，14:00 就应算逾期，
+   只按天比会把「当天已过时」误判成「今天截止、还剩时间」。 */
+function taskIsOverdue(t, st){ const ts=taskDueTs(t); return ts!==null && Date.now()>ts && !st.allDone; }
 
 function renderTask(){
   const el=$('#page-task');
@@ -2017,7 +2035,8 @@ function renderTask(){
     /* 排序：逾期未完成 → 未完成（按截止日期近的在前）→ 已完成 */
     const oa=taskIsOverdue(a,sa)?0:(sa.allDone?2:1), ob=taskIsOverdue(b,sb)?0:(sb.allDone?2:1);
     if(oa!==ob) return oa-ob;
-    const da=a.due||'9999-12-31', db2=b.due||'9999-12-31';
+    /* 同一天的任务按时段排：12:00 在前，18:00 在后 */
+    const da=(a.due||'9999-12-31')+' '+taskDueTime(a), db2=(b.due||'9999-12-31')+' '+taskDueTime(b);
     if(da!==db2) return da.localeCompare(db2);
     return String(b.createdAt||'').localeCompare(String(a.createdAt||''));
   });
@@ -2040,14 +2059,21 @@ function renderTask(){
      ⚠️ 专员（工作人员）在接口层已经只拿到「指派给我的 + 自己的备忘」，
         界面再兜一层：非管理员的默认/兜底视图固定为「我的待办」，不出现全部/他人任务。 */
   const effFilter = isAdmin ? taskFilter : ((taskFilter==='all'||taskFilter==='assign') ? 'mine' : taskFilter);
-  const list = tasks.filter(t=>{
+  /* 先按 Tab 出底表，再叠「只看未完成」。
+     ⚠️ 2026-10-28 用户反馈「按下和没按下一样」：机制本来生效，但
+        ① 原来把「已结束」的任务算作未完成（结束=不用再做，应当隐藏）；
+        ② 某些 Tab（如「指派任务」里全是 2/8 这种）确实一条都藏不掉，界面上毫无反馈，
+           看起来就像按钮没反应 → 现在底部会显示「显示 X 条 / 隐藏 Y 条」，空变化也有明确提示。 */
+  const baseList = tasks.filter(t=>{
     if(effFilter==='assign' && t.kind!=='assign') return false;
     if(effFilter==='mine' && !isMine(t)) return false;
     if(effFilter==='personal' && t.kind!=='personal') return false;
-    const st=taskStat(t);
-    if(taskOnlyTodo && st.allDone) return false;
     return true;
   });
+  const list = taskOnlyTodo
+    ? baseList.filter(t=>{ const st=taskStat(t); return !(st.allDone || t.closed); })
+    : baseList;
+  const hiddenTodo = baseList.length - list.length;
 
   const statCard=(label,val,color,sub)=>`<div class="card" style="padding:16px 18px;flex:1;min-width:150px">
       <div class="mini" style="font-weight:700;color:var(--muted);letter-spacing:.4px">${label}</div>
@@ -2073,6 +2099,8 @@ function renderTask(){
       </div>
       ${isAdmin?'':'<span class="mini" style="color:var(--muted)">仅显示指派给你和你自己记的待办</span>'}
       <label class="mini" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600"><input type="checkbox" id="taskOnlyTodo" ${taskOnlyTodo?'checked':''} style="width:auto;padding:0;margin:0"> 只看未完成</label>
+      ${taskOnlyTodo?`<span class="pill" id="todoFilterHint" style="background:#e0e7ff;color:#3730a3;border-color:#a5b4fc">显示 ${list.length} 条 · 隐藏 ${hiddenTodo} 条${hiddenTodo?'（已完成/已结束）':''}</span>`:''}
+      ${taskOnlyTodo&&hiddenTodo===0?`<span class="mini" id="todoFilterNoChange" style="color:var(--muted)">该分类下没有已完成的任务，所以列表没有变化</span>`:''}
       <div style="flex:1"></div>
       <button class="btn primary" id="taskNewBtn">${isAdmin?'+ 新建任务':'+ 新建备忘'}</button>
     </div>
@@ -2101,14 +2129,18 @@ function taskCardHtml(t){
   const overdue = taskIsOverdue(t, st);
   const mine = t.kind==='assign' ? (t.assignees||[]).indexOf(me)>=0 : t.owner===me;
   const iDone = (t.done||[]).some(d=>d.name===me);
+  const tm = taskDueTime(t);
   let dueTxt='未设截止', dueCls='';
   if(t.due){
-    if(st.allDone){ dueTxt='截止 '+t.due; }
-    else if(left<0){ dueTxt='逾期 '+Math.abs(left)+' 天'; dueCls='red'; }
-    else if(left===0){ dueTxt='今天截止'; dueCls='amber'; }
+    if(st.allDone){ dueTxt='截止 '+taskFmtDue(t); }
+    else if(overdue){ dueTxt = (left<0) ? ('逾期 '+Math.abs(left)+' 天') : ('已过 '+tm); dueCls='red'; }
+    else if(left===0){ dueTxt='今天 '+tm; dueCls='amber'; }
+    else if(left===1){ dueTxt='明天 '+tm; dueCls='amber'; }
     else { dueTxt='剩 '+left+' 天'; dueCls=left<=2?'amber':''; }
   }
   const nFiles = (t.files||[]).length;
+  /* 待处理的加分请求数（2026-10-28）：让管理员在卡片墙上一眼看到哪些任务有人在等给分 */
+  const pendBonus = (t.done||[]).filter(d=>d.bonus && !d.bonus.handled).length;
   return `<div class="task-card${overdue?' overdue':''}${st.allDone?' done':''}" data-task-id="${esc(t.id)}" tabindex="0" role="button" title="点击查看明细">
     <div class="tc-head">
       <span class="pill ${t.kind==='assign'?'p-blue':'p-purple'}">${t.kind==='assign'?'指派':'备忘'}</span>
@@ -2121,6 +2153,7 @@ function taskCardHtml(t){
     <div class="tc-foot">
       <span class="mini">${t.kind==='assign'?('👥 '+(t.assignees||[]).length):'📌 私有'}</span>
       ${nFiles?`<span class="mini">📎 ${nFiles}</span>`:''}
+      ${pendBonus?`<span class="pill" style="background:#fee2e2;color:#b91c1c;border-color:#fecaca" title="${pendBonus} 条加分请求待处理">待加分 ${pendBonus}</span>`:''}
       <span style="flex:1"></span>
       ${st.allDone?'<span class="pill p-green">已完成</span>':(t.closed?'<span class="pill p-gray">已结束</span>':(mine&&!iDone?'<span class="pill p-amber">待我完成</span>':''))}
     </div>
@@ -2158,7 +2191,14 @@ function openTaskForm(task, personalOnly){
     ${isEdit?`<div class="mini" style="margin-bottom:10px;color:var(--muted)">类型：${t.kind==='assign'?'指派任务':'个人备忘'}（类型不可改）</div>`:''}
     <div class="field"><label>任务标题 *</label><input id="tkTitle" placeholder="例：10 月意大利包装法申报核对" maxlength="120" value="${esc(t.title||'')}"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-      <div class="field"><label>截止日期</label><input type="date" id="tkDue" value="${esc(t.due||'')}"></div>
+      <div class="field"><label>截止时间</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="date" id="tkDue" value="${esc(t.due||'')}" style="flex:1;min-width:0">
+          <div class="seg" id="tkDueTimeSeg" style="flex:0 0 auto">
+            <button data-dt="12:00" style="padding:6px 10px;font-size:12.5px">12:00</button><button data-dt="18:00" style="padding:6px 10px;font-size:12.5px">18:00</button>
+          </div>
+        </div>
+      </div>
       <div class="field" id="tkPtsWrap"><label>每人完成可得点数${canEditPoints?'':' <span style="color:var(--muted)">（仅管理员可改）</span>'}</label><input type="number" id="tkPoints" value="${t.points!==undefined?t.points:10}" min="0" step="1" ${canEditPoints?'':'disabled'}></div>
     </div>
     <div class="field" id="tkWhoWrap" style="margin-top:10px"><label>指派给（可多选）${canEditPoints?'':' <span style="color:var(--muted)">（仅管理员可改）</span>'}</label>
@@ -2176,6 +2216,13 @@ function openTaskForm(task, personalOnly){
 
   let kind = t.kind || (lockPersonal ? 'personal' : 'assign');
   const ptsWrap=$('#tkPtsWrap'), whoWrap=$('#tkWhoWrap');
+
+  /* 截止时段（2026-10-28 需求）：只有 12:00 / 18:00 两档，默认 18:00，编辑时回填原值 */
+  let dueTime = (t.dueTime==='12:00'||t.dueTime==='18:00') ? t.dueTime : '18:00';
+  const dtSeg=$('#tkDueTimeSeg');
+  const paintDueTime=()=>dtSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.dt===dueTime));
+  paintDueTime();
+  dtSeg.querySelectorAll('button').forEach(b=>b.onclick=()=>{ dueTime=b.dataset.dt; paintDueTime(); });
 
   /* 个人备忘没有「指派对象」和「点数」这两个概念 —— 编辑态没有类型切换按钮，
      所以必须在这里补一次隐藏，否则会出现截图中「个人备忘却让你选人」的问题 */
@@ -2199,14 +2246,14 @@ function openTaskForm(task, personalOnly){
     const btn=$('#tkSave'); btn.disabled=true; btn.textContent=isEdit?'保存中…':'发布中…';
     try{
       if(isEdit){
-        const payload={ id:t.id, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value };
+        const payload={ id:t.id, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value, dueTime };
         if(isAdmin && t.kind==='assign'){ payload.points=Number($('#tkPoints').value)||0; payload.assignees=assignees; }
 
         const r=await api('/api/tasks/update',{method:'POST',body:JSON.stringify(payload)});
         if(r && r.ok){ closeModal(); toast('已保存修改'); await loadState(); renderTask(); }
         else { toast((r&&r.error)||'保存失败'); btn.disabled=false; btn.textContent='保存修改'; }
       } else {
-        const payload={ kind, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value,
+        const payload={ kind, title, desc:$('#tkDesc').value.trim(), due:$('#tkDue').value, dueTime,
                         points:Number($('#tkPoints').value)||0, assignees };
         const r=await api('/api/tasks/create',{method:'POST',body:JSON.stringify(payload)});
         if(r && r.ok){ closeModal(); toast(kind==='assign'?'任务已发布':'待办已添加'); await loadState(); renderTask(); }
@@ -2226,7 +2273,13 @@ function openTaskDetail(id){
   const iDone=(t.done||[]).some(d=>d.name===me);
   const left=taskDaysLeft(t.due), overdue=taskIsOverdue(t,st);
   let dueTxt='未设置';
-  if(t.due){ dueTxt = st.allDone ? t.due : (left<0 ? (t.due+'（已逾期 '+Math.abs(left)+' 天）') : (left===0?'今天截止（'+t.due+'）':(t.due+'（剩 '+left+' 天）'))); }
+  if(t.due){
+    const full=t.due+' '+taskDueTime(t);
+    if(st.allDone) dueTxt=full;
+    else if(overdue) dueTxt=full+(left<0?('（已逾期 '+Math.abs(left)+' 天）'):'（已过截止时段）');
+    else if(left===0) dueTxt=full+'（今天截止）';
+    else dueTxt=full+'（剩 '+left+' 天）';
+  }
   const people = t.kind==='personal'
     ? `<span class="pill ${iDone?'p-green':'p-gray'}">${esc(t.owner)}${iDone?' ✓':''}</span>`
     : (t.assignees||[]).map(n=>{
@@ -2276,6 +2329,13 @@ function openTaskDetail(id){
         <b style="color:var(--ink)">${esc(d.name)}</b> · ${esc(taskFmtTime(d.at))}
         ${d.note?`<div style="margin-top:4px;color:var(--muted)">${esc(d.note)}</div>`:''}
         ${(d.files||[]).length?`<div style="margin-top:6px">${(d.files||[]).map(f=>`<button class="btn" data-dl="${esc(f.file)}" data-dlname="${esc(f.name)}" style="padding:3px 9px;margin-right:6px;font-size:12px">📎 ${esc(f.name)}</button>`).join('')}</div>`:'<div style="margin-top:4px;color:var(--line)">无附件</div>'}
+        ${/* 请求加分（2026-10-28）：请求后在这里留痕，管理员给分后自动变「已加分」 */''}
+        ${d.bonus ? `<div style="margin-top:8px;padding:7px 9px;border-radius:9px;border:1px solid ${d.bonus.handled?'var(--line)':'#fecaca'};background:${d.bonus.handled?'rgba(45,157,90,.07)':'rgba(220,38,38,.05)'}">
+            <b style="color:${d.bonus.handled?'var(--green)':'var(--red)'}">${d.bonus.handled?('已加分 '+(d.bonus.points||0)+' 点'):'⏳ 已请求加分，待管理员处理'}</b>
+            <div style="margin-top:3px;color:var(--muted)">理由：${esc(d.bonus.note)}</div>
+            ${(d.bonus.files||[]).length?`<div style="margin-top:4px">${d.bonus.files.map(f=>`<button class="btn" data-dl="${esc(f.file)}" data-dlname="${esc(f.name)}" style="padding:2px 8px;margin-right:6px;font-size:11.5px">📎 ${esc(f.name)}</button>`).join('')}</div>`:''}
+          </div>`
+          : ((d.name===me && !t.closed) ? `<div style="margin-top:6px"><span data-ask-bonus="${esc(d.name)}" style="color:var(--brand);cursor:pointer;text-decoration:underline;font-weight:700">+ 请求加分</span> <span style="color:var(--muted)">实际工作量高于设定时，说明理由并附凭证，由管理员酌情给分</span></div>` : '')}
         ${canEdit?`<div style="margin-top:6px"><span data-td-reopen="${esc(d.name)}" style="color:var(--red);cursor:pointer;text-decoration:underline">撤销该完成</span></div>`:''}
       </div>`).join('')}
     </div>`:''}
@@ -2291,7 +2351,8 @@ function openTaskDetail(id){
         <input type="file" id="tdFiles" multiple style="padding:8px">
         <div id="tdFileList" class="mini" style="margin-top:6px;color:var(--muted)">未选择附件</div>
       </div>
-      <div style="display:flex;justify-content:flex-end;margin-top:12px">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+        <button class="btn" id="tdAskBonusPre" title="实际工作量比设定高时可申请加分">请求加分</button>
         <button class="btn primary" id="tdSubmit">确认完成</button>
       </div>
     </div>`:''
@@ -2345,6 +2406,10 @@ function openTaskDetail(id){
   const ddel=$('#tdDel'); if(ddel) ddel.onclick=()=>{ closeModal(); deleteTask(t.id); };
   const dedit=$('#tdEdit'); if(dedit) dedit.onclick=()=>{ closeModal(); openTaskForm(t); };
   $('#modal').querySelectorAll('[data-td-reopen]').forEach(a=>a.onclick=()=>{ closeModal(); reopenTaskDone(t.id, a.dataset.tdReopen); });
+  /* 请求加分：内联区那个按钮只是入口，必须先完成；完成记录里的「+ 请求加分」才真正打开弹窗 */
+  const preAsk=$('#tdAskBonusPre');
+  if(preAsk) preAsk.onclick=()=>toast('请先点「确认完成」，完成后再请求加分');
+  $('#modal').querySelectorAll('[data-ask-bonus]').forEach(a=>{ a.onclick=()=>openTaskBonus(t.id, a.dataset.askBonus); });
   $('#modal').querySelectorAll('[data-dl]').forEach(b=>b.onclick=()=>downloadEvidence(b.dataset.dl, b, b.dataset.dlname));
 }
 
@@ -2409,6 +2474,73 @@ function openCompleteModal(id){
     }catch(e){ toast('操作失败：'+e.message); btn.disabled=false; btn.textContent='确认完成'; }
   };
 }
+/* ---------- 请求加分（2026-10-28 需求） ----------
+   背景：任务点数在发布时就定死了，但实际工作量差异很大（客户资料缺失、反复返工）。
+   口径：领取人对「自己那次完成」提交加分理由 + 凭证 → 进入「工作量点数 → 录入明细」，
+        显示红色「待加分」，由管理员按原有改分流程酌情给分；给分后任务明细里自动变「已加分 X 点」。 */
+function openTaskBonus(id, name){
+  const t=(DB.tasks||[]).find(x=>x.id===id); if(!t) return;
+  const d=(t.done||[]).find(x=>x.name===name);
+  if(!d){ toast('还没有完成记录，请先点「确认完成」'); return; }
+  const pts=Number(t.points)||0;
+  $('#modal').innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h3 style="margin:0">请求加分</h3>
+      <button class="btn ghost" id="bnX" style="padding:6px 10px">✕</button>
+    </div>
+    <div style="font-weight:800;font-size:15px;margin-bottom:6px">${esc(t.title)}</div>
+    <div class="mini" style="color:var(--muted);margin-bottom:14px">
+      完成人 <b style="color:var(--ink)">${esc(name)}</b> · 任务设定 <b style="color:var(--brand)">${pts}</b> 点 · 完成于 ${esc(taskFmtTime(d.at))}
+      <br>提交后进入「工作量点数 → 录入明细」，显示红色「待加分」，由管理员酌情给分。
+    </div>
+    <div class="field"><label>加分理由 *（说明实际工作量为什么高于设定）</label>
+      <textarea id="bnNote" rows="4" placeholder="例：客户资料缺失，往返补交 3 轮，另核对了 2 个国家的历史数据…" style="resize:vertical"></textarea></div>
+    <div class="field" style="margin-top:10px"><label>凭证（可选，单个 ≤10MB，最多 8 个）</label>
+      <input type="file" id="bnFiles" multiple style="padding:8px">
+      <div id="bnFileList" class="mini" style="margin-top:6px;color:var(--muted)">未选择凭证</div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" id="bnCancel">取消</button>
+      <button class="btn primary" id="bnSave">提交加分请求</button>
+    </div>`;
+  $('#modalBg').classList.add('show');
+
+  let picked=[];
+  const fl=$('#bnFileList');
+  const paint=()=>{
+    if(!picked.length){ fl.textContent='未选择凭证'; return; }
+    fl.innerHTML=picked.map((f,i)=>`<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;margin:0 6px 6px 0">📎 ${esc(f.name)} <span style="color:var(--muted)">${f.size<1024?(f.size+'B'):((f.size/1024).toFixed(0)+'KB')}</span> <a href="javascript:void 0" data-bn-rm="${i}" style="color:var(--red)">移除</a></span>`).join('');
+    fl.querySelectorAll('[data-bn-rm]').forEach(a=>a.onclick=()=>{ picked.splice(Number(a.dataset.bnRm),1); paint(); });
+  };
+  paint();
+
+  $('#bnFiles').onchange = async (ev)=>{
+    const files=[...ev.target.files];
+    if(picked.length+files.length>8){ toast('凭证最多 8 个'); ev.target.value=''; return; }
+    for(const f of files){
+      if(f.size>10*1024*1024){ toast('「'+f.name+'」超过 10MB，已跳过'); continue; }
+      const dataUrl=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(f); });
+      picked.push({ name:f.name, type:f.type||'', size:f.size, dataUrl });
+    }
+    ev.target.value=''; paint();
+  };
+
+  $('#bnX').onclick=closeModal;
+  $('#bnCancel').onclick=closeModal;
+  $('#bnSave').onclick=async ()=>{
+    const note=$('#bnNote').value.trim();
+    if(!note){ toast('请填写加分理由'); return; }
+    const btn=$('#bnSave'); btn.disabled=true; btn.textContent='提交中…';
+    try{
+      const payload={ id:t.id, name, note,
+        files: picked.map(f=>({ name:f.name, type:f.type, data:(f.dataUrl.split(',')[1]||null) })) };
+      const r=await api('/api/tasks/request-bonus',{method:'POST',body:JSON.stringify(payload)});
+      if(r && r.ok){ closeModal(); toast('加分请求已提交，等管理员处理'); await loadState(); renderTask(); }
+      else { toast((r&&r.error)||'提交失败'); btn.disabled=false; btn.textContent='提交加分请求'; }
+    }catch(e){ toast('提交失败：'+e.message); btn.disabled=false; btn.textContent='提交加分请求'; }
+  };
+}
+
 function markTaskDone(id){ openCompleteModal(id); }
 async function reopenTaskDone(id,name){
   if(!confirm('撤销「'+name+'」在这个任务上的完成记录？')) return;
@@ -3872,6 +4004,11 @@ function openPointsEdit(recId, onDone){
       <label>工作说明</label>
       <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:14px;white-space:pre-wrap;min-height:42px;word-break:break-word">${rec.note?esc(rec.note):'<span class="mini" style="color:var(--muted)">（未填写工作说明）</span>'}</div>
     </div>
+    ${(rec.requestBonus && rec.bonusNote)?`
+    <div class="field" style="margin-bottom:14px">
+      <label>加分理由 <span class="mini">（待办任务的加分请求：实际工作量高于设定）</span></label>
+      <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:14px;white-space:pre-wrap;min-height:42px;word-break:break-word">${esc(rec.bonusNote)}</div>
+    </div>`:''}
     ${rec.requestBonus?`
     <div class="field" style="margin-bottom:14px">
       <label>加分校准 <span class="mini">（专员提交加分请求时填写的三项评级）</span></label>
@@ -3955,6 +4092,11 @@ function openDailyDetail(recId){
       <label>工作说明</label>
       <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:14px;white-space:pre-wrap;min-height:42px;word-break:break-word">${rec.note?esc(rec.note):'<span class="mini" style="color:var(--muted)">（未填写工作说明）</span>'}</div>
     </div>
+    ${(rec.requestBonus && rec.bonusNote)?`
+    <div class="field" style="margin-bottom:14px">
+      <label>加分理由 <span class="mini">（待办任务的加分请求：实际工作量高于设定）</span></label>
+      <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:14px;white-space:pre-wrap;min-height:42px;word-break:break-word">${esc(rec.bonusNote)}</div>
+    </div>`:''}
     ${rec.requestBonus?`
     <div class="field" style="margin-bottom:14px">
       <label>加分校准 <span class="mini">（专员提交加分请求时填写的三项评级）</span></label>

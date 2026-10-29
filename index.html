@@ -469,7 +469,7 @@
 <div class="login" id="login">
   <div class="box">
     <h2>欧洲EPR合规交付控制台</h2>
-    <div class="sub">多人协作版 · <span class="ver">v1.40</span> · 登录后可见系统内全部数据</div>
+    <div class="sub">多人协作版 · <span class="ver">v1.43</span> · 登录后可见系统内全部数据</div>
     <div class="err" id="loginErr"></div>
     <div class="field"><label>账号</label><input id="loginUser" placeholder="请输入账号" autofocus></div>
     <div class="field"><label>密码</label><input id="loginPw" type="password" placeholder="请输入密码"></div>
@@ -482,7 +482,7 @@
   <aside class="sidebar">
     <div class="logo">
       <div class="dot">E</div>
-      <div><b>EPR 交付控制台</b><span class="ver">v1.40</span><small>欧洲合规 · 工作量管理</small></div>
+      <div><b>EPR 交付控制台</b><span class="ver">v1.43</span><small>欧洲合规 · 工作量管理</small></div>
     </div>
     <nav class="nav" id="nav">
       <button data-page="dash" class="active"><span class="ico">▦</span>驾驶舱看板</button>
@@ -495,7 +495,7 @@
       <button data-page="report"><span class="ico">📊</span>数据报表</button>
       <button data-page="log"><span class="ico">📋</span>系统日志</button>
     </nav>
-    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.40</span><br>数据存于服务端</div>
+    <div class="side-foot" id="meFoot">多人协作版 · <span class="ver">v1.43</span><br>数据存于服务端</div>
   </aside>
 
   <div class="main">
@@ -1985,6 +1985,7 @@ function renderPoints(){
    ⚠️ 原型阶段分数只在本模块累计，不写入 daily（是否并入工作量点数待确认）
    ============================================================ */
 let taskFilter = 'all';        // all | mine | assign | personal
+let taskStaff = '';            // 员工筛选（空 = 全部员工）2026-10-29 新增
 let taskOnlyTodo = false;      // 只看未完成
 
 function taskTodayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -2030,6 +2031,9 @@ function renderTask(){
   const el=$('#page-task');
   const isAdmin = isAdminRole();
   const me = DB.me.displayName;
+  /* 员工下拉的选项（2026-10-29）：取系统账号名，保证「没有任何任务的人」也能被选中排查 */
+  const staffNames = Array.from(new Set((DB.users||[]).map(u=>u.displayName).filter(Boolean)))
+    .sort((a,b)=>a.localeCompare(b,'zh-Hans-CN'));
   const tasks = (DB.tasks||[]).slice().sort((a,b)=>{
     const sa=taskStat(a), sb=taskStat(b);
     /* 排序：逾期未完成 → 未完成（按截止日期近的在前）→ 已完成 */
@@ -2056,18 +2060,22 @@ function renderTask(){
   });
 
   /* ---- 筛选 ----
-     ⚠️ 专员（工作人员）在接口层已经只拿到「指派给我的 + 自己的备忘」，
-        界面再兜一层：非管理员的默认/兜底视图固定为「我的待办」，不出现全部/他人任务。 */
+     2026-10-29 最终口径（用户两次改主意后的定稿）：
+       · 专员只能看「指派给自己的 + 自己的备忘」——服务端 /api/state 已过滤，界面再把 Tab 收成 2 个；
+       · 管理员/root 看全部，并额外提供「员工」下拉按人筛；
+       · 员工下拉只对管理员渲染，专员根本拿不到别人的数据，也不显示这个控件。 */
   const effFilter = isAdmin ? taskFilter : ((taskFilter==='all'||taskFilter==='assign') ? 'mine' : taskFilter);
-  /* 先按 Tab 出底表，再叠「只看未完成」。
+  /* 先按 Tab 出底表，再叠「员工」和「只看未完成」。
      ⚠️ 2026-10-28 用户反馈「按下和没按下一样」：机制本来生效，但
         ① 原来把「已结束」的任务算作未完成（结束=不用再做，应当隐藏）；
         ② 某些 Tab（如「指派任务」里全是 2/8 这种）确实一条都藏不掉，界面上毫无反馈，
            看起来就像按钮没反应 → 现在底部会显示「显示 X 条 / 隐藏 Y 条」，空变化也有明确提示。 */
+  const touchBy = (t,name) => t.kind==='personal' ? t.owner===name : (t.assignees||[]).indexOf(name)>=0;
   const baseList = tasks.filter(t=>{
     if(effFilter==='assign' && t.kind!=='assign') return false;
     if(effFilter==='mine' && !isMine(t)) return false;
     if(effFilter==='personal' && t.kind!=='personal') return false;
+    if(taskStaff && !touchBy(t, taskStaff)) return false;
     return true;
   });
   const list = taskOnlyTodo
@@ -2097,7 +2105,13 @@ function renderTask(){
         ${isAdmin?`<button data-tf="assign" class="${effFilter==='assign'?'on':''}">指派任务（${tasks.filter(t=>t.kind==='assign').length}）</button>`:''}
         <button data-tf="personal" class="${effFilter==='personal'?'on':''}">个人备忘（${tasks.filter(t=>t.kind==='personal').length}）</button>
       </div>
-      ${isAdmin?'':'<span class="mini" style="color:var(--muted)">仅显示指派给你和你自己记的待办</span>'}
+      ${isAdmin?`<label class="mini" style="display:flex;align-items:center;gap:6px;font-weight:600">员工
+        <select id="taskStaffSel" style="width:auto;min-width:118px;padding:6px 8px;font-size:12.5px">
+          <option value="">全部员工</option>
+          ${staffNames.map(n=>`<option value="${esc(n)}" ${taskStaff===n?'selected':''}>${esc(n)}</option>`).join('')}
+        </select>
+      </label>`:''}
+      ${isAdmin&&taskStaff?`<span class="pill" id="taskStaffHint" style="background:#ecfdf5;color:#047857;border-color:#a7f3d0">只看 ${esc(taskStaff)} 的待办（${baseList.length} 条）</span>`:''}
       <label class="mini" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600"><input type="checkbox" id="taskOnlyTodo" ${taskOnlyTodo?'checked':''} style="width:auto;padding:0;margin:0"> 只看未完成</label>
       ${taskOnlyTodo?`<span class="pill" id="todoFilterHint" style="background:#e0e7ff;color:#3730a3;border-color:#a5b4fc">显示 ${list.length} 条 · 隐藏 ${hiddenTodo} 条${hiddenTodo?'（已完成/已结束）':''}</span>`:''}
       ${taskOnlyTodo&&hiddenTodo===0?`<span class="mini" id="todoFilterNoChange" style="color:var(--muted)">该分类下没有已完成的任务，所以列表没有变化</span>`:''}
@@ -2113,6 +2127,7 @@ function renderTask(){
   /* ---- 交互 ----
      卡片点击 → 打开明细弹窗；卡片里的按钮必须 stopPropagation，否则会顺带把明细也打开。 */
   el.querySelectorAll('#taskTabSeg button').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; renderTask(); });
+  const ss=$('#taskStaffSel'); if(ss) ss.onchange=()=>{ taskStaff=ss.value; renderTask(); };
   const cb=$('#taskOnlyTodo'); if(cb) cb.onchange=()=>{ taskOnlyTodo=cb.checked; renderTask(); };
   const nb=$('#taskNewBtn'); if(nb) nb.onclick=()=>openTaskForm(null, !isAdmin);
   el.querySelectorAll('.task-card').forEach(c=>{
@@ -2151,7 +2166,7 @@ function taskCardHtml(t){
     <div class="tc-bar"><i style="width:${st.pct}%"></i></div>
     <div class="tc-meta"><b>${st.done}/${st.total}</b> 人${t.kind==='assign'?` · <b>${st.donePts}/${st.totalPts}</b> 点`:''} · ${st.pct}%</div>
     <div class="tc-foot">
-      <span class="mini">${t.kind==='assign'?('👥 '+(t.assignees||[]).length):'📌 私有'}</span>
+      <span class="mini" title="${t.kind==='assign'?esc((t.assignees||[]).join('、')):esc(t.owner||'')}">${t.kind==='assign'?('👥 '+(t.assignees||[]).length):('👤 '+esc(t.owner||'-'))}</span>
       ${nFiles?`<span class="mini">📎 ${nFiles}</span>`:''}
       ${pendBonus?`<span class="pill" style="background:#fee2e2;color:#b91c1c;border-color:#fecaca" title="${pendBonus} 条加分请求待处理">待加分 ${pendBonus}</span>`:''}
       <span style="flex:1"></span>

@@ -15,7 +15,7 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data.json');
 const UPLOADS = path.join(ROOT, 'uploads');
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = '1.40';  // [由 _tools/version_bump.py 自动维护]
+const APP_VERSION = '1.43';  // [由 _tools/version_bump.py 自动维护]
 const MAX_BODY = 80 * 1024 * 1024; // 80MB（容纳 base64 凭证）
 
 /* ---------- 工单系统（ECOPv）自动同步 ----------
@@ -916,6 +916,10 @@ async function handleApi(req, res, pathname){
       /* 待办任务的可见范围（2026-10-26 权限规定，用户明确要求「专员只能看到自己的待办」）：
          管理员 → 全部；专员 → 指派给自己的（assignees 含本人）+ 自己建的个人备忘。
          个人备忘对他人一律不可见（连标题都取不到）。 */
+      /* 2026-10-29 第二次口径修正（用户看到专员能看到全员备忘后要求收回）：
+         **专员只能看到「指派给自己的 + 自己的备忘」**，管理员/root 看全部。
+         之前的 v1.42 曾短暂放开为全员可见，本次按用户要求恢复私有。
+         界面配套：员工筛选下拉只对管理员渲染；专员的 Tab 只有「我的待办 / 个人备忘」。 */
       tasks: (DB.tasks || []).filter(t => isAdminLike(user)
         || (t.kind === 'personal' ? t.owner === user.displayName
                                   : (t.assignees || []).indexOf(user.displayName) >= 0))

@@ -1986,6 +1986,8 @@ function renderPoints(){
    ============================================================ */
 let taskFilter = 'all';        // all | mine | assign | personal
 let taskStaff = '';            // 员工筛选（空 = 全部员工）2026-10-29 新增
+let taskSortBy = 'default';    // default（逾期优先）| due（截止日期）| created（发布时间）2026-11-03
+let taskSortDir = 'asc';       // asc 正序 | desc 倒序
 let taskOnlyTodo = false;      // 只看未完成
 
 function taskTodayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -2035,8 +2037,26 @@ function renderTask(){
   const staffNames = Array.from(new Set((DB.users||[]).map(u=>u.displayName).filter(Boolean)))
     .sort((a,b)=>a.localeCompare(b,'zh-Hans-CN'));
   const tasks = (DB.tasks||[]).slice().sort((a,b)=>{
+    /* 排序（2026-11-03 新增两种可切换规则）：
+         default（默认）= 逾期未完成 → 未完成 → 已完成，组内按截止日期近的在前
+         due           = 纯按截止日期（没设截止的永远排后面，不受方向影响）
+         created       = 按任务发布时间（createdAt）
+       方向 asc / desc 只作用于后两种；同值时用 createdAt 兜底，保证顺序稳定。 */
+    if(taskSortBy==='created'){
+      const ca=String(a.createdAt||''), cb=String(b.createdAt||'');
+      const r = ca.localeCompare(cb);
+      return r===0 ? 0 : (taskSortDir==='asc' ? r : -r);
+    }
+    if(taskSortBy==='due'){
+      const ea=!!a.due, eb=!!b.due;
+      if(ea!==eb) return ea ? -1 : 1;          // 没设截止日期的排最后
+      const da=(a.due||'')+' '+taskDueTime(a), db2=(b.due||'')+' '+taskDueTime(b);
+      const r = da.localeCompare(db2);
+      if(r!==0) return taskSortDir==='asc' ? r : -r;
+      return String(b.createdAt||'').localeCompare(String(a.createdAt||''));
+    }
     const sa=taskStat(a), sb=taskStat(b);
-    /* 排序：逾期未完成 → 未完成（按截止日期近的在前）→ 已完成 */
+    /* 默认排序：逾期未完成 → 未完成（按截止日期近的在前）→ 已完成 */
     const oa=taskIsOverdue(a,sa)?0:(sa.allDone?2:1), ob=taskIsOverdue(b,sb)?0:(sb.allDone?2:1);
     if(oa!==ob) return oa-ob;
     /* 同一天的任务按时段排：12:00 在前，18:00 在后 */
@@ -2113,6 +2133,14 @@ function renderTask(){
       </label>`:''}
       ${isAdmin&&taskStaff?`<span class="pill" id="taskStaffHint" style="background:#ecfdf5;color:#047857;border-color:#a7f3d0">只看 ${esc(taskStaff)} 的待办（${baseList.length} 条）</span>`:''}
       <label class="mini" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600"><input type="checkbox" id="taskOnlyTodo" ${taskOnlyTodo?'checked':''} style="width:auto;padding:0;margin:0"> 只看未完成</label>
+      <label class="mini" style="display:flex;align-items:center;gap:6px;font-weight:600">排序
+        <select id="taskSortBy" style="width:auto;padding:6px 8px;font-size:12.5px">
+          <option value="default" ${taskSortBy==='default'?'selected':''}>默认（逾期优先）</option>
+          <option value="due" ${taskSortBy==='due'?'selected':''}>按截止日期</option>
+          <option value="created" ${taskSortBy==='created'?'selected':''}>按发布时间</option>
+        </select>
+      </label>
+      ${taskSortBy==='default'?'':`<button class="btn" id="taskSortDirBtn" title="切换正序 / 倒序">${taskSortDir==='asc'?'↑ 正序':'↓ 倒序'}</button>`}
       ${taskOnlyTodo?`<span class="pill" id="todoFilterHint" style="background:#e0e7ff;color:#3730a3;border-color:#a5b4fc">显示 ${list.length} 条 · 隐藏 ${hiddenTodo} 条${hiddenTodo?'（已完成/已结束）':''}</span>`:''}
       ${taskOnlyTodo&&hiddenTodo===0?`<span class="mini" id="todoFilterNoChange" style="color:var(--muted)">该分类下没有已完成的任务，所以列表没有变化</span>`:''}
       <div style="flex:1"></div>
@@ -2128,6 +2156,9 @@ function renderTask(){
      卡片点击 → 打开明细弹窗；卡片里的按钮必须 stopPropagation，否则会顺带把明细也打开。 */
   el.querySelectorAll('#taskTabSeg button').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; renderTask(); });
   const ss=$('#taskStaffSel'); if(ss) ss.onchange=()=>{ taskStaff=ss.value; renderTask(); };
+  /* 排序（2026-11-03）：下拉换规则，按钮切正/倒序；切回「默认」时按钮自动隐藏 */
+  const sbSel=$('#taskSortBy'); if(sbSel) sbSel.onchange=()=>{ taskSortBy=sbSel.value; renderTask(); };
+  const sbDir=$('#taskSortDirBtn'); if(sbDir) sbDir.onclick=()=>{ taskSortDir = (taskSortDir==='asc'?'desc':'asc'); renderTask(); };
   const cb=$('#taskOnlyTodo'); if(cb) cb.onchange=()=>{ taskOnlyTodo=cb.checked; renderTask(); };
   const nb=$('#taskNewBtn'); if(nb) nb.onclick=()=>openTaskForm(null, !isAdmin);
   el.querySelectorAll('.task-card').forEach(c=>{
